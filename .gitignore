@@ -1,0 +1,14 @@
+# Local reference material must never be published.
+*.pdf
+PROJECT_HANDOVER.md
+DAY_PROGRESS.md
+MATCHING.md
+.superpowers/
+.local/
+.tools/
+.env
+!.env.example
+bin/
+coverage.out
+*.log
+.worktrees/
