@@ -1,0 +1,9 @@
+.git
+.superpowers
+.local
+*.pdf
+PROJECT_HANDOVER.md
+DAY_PROGRESS.md
+**/.env
+bin
+*.log
