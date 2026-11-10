@@ -14,7 +14,10 @@ import (
 type Client struct {
 	base, secret, prefix string
 	http                 *http.Client
+	version              uint64
 }
+
+func (c *Client) WithVersion(v uint64) *Client { clone := *c; clone.version = v; return &clone }
 
 func NewClient(base, secret string) *Client {
 	return &Client{base: base, secret: secret, prefix: "/internal", http: &http.Client{Timeout: 5 * time.Second}}
@@ -35,6 +38,7 @@ func (c *Client) call(ctx context.Context, method, path, key string, body any) (
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Internal-Secret", c.secret)
 	req.Header.Set("Idempotency-Key", key)
+	req.Header.Set("X-Route-Version", fmt.Sprint(c.version))
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return result, fmt.Errorf("%w: request failed", contracts.ErrUnavailable)

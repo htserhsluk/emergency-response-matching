@@ -1,0 +1,1746 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "node-0a",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-0a"
+        },
+        "ports": [
+          {
+            "name": "http",
+            "port": 8082
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "db-0a",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-0a"
+        },
+        "ports": [
+          {
+            "name": "postgres",
+            "port": 5432
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "node-0a",
+        "namespace": "erm"
+      },
+      "spec": {
+        "serviceName": "node-0a",
+        "replicas": 0,
+        "selector": {
+          "matchLabels": {
+            "app": "erm",
+            "node": "node-0a"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "erm",
+              "node": "node-0a"
+            }
+          },
+          "spec": {
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "db",
+                "image": "postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9",
+                "command": [
+                  "bash",
+                  "/config/start-node.sh"
+                ],
+                "env": [
+                  {
+                    "name": "POSTGRES_USER",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "POSTGRES_DB",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "PGDATA",
+                    "value": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "BOOTSTRAP_ROLE",
+                    "value": "primary"
+                  },
+                  {
+                    "name": "PRIMARY_HOST",
+                    "value": "db-0a"
+                  },
+                  {
+                    "name": "NODE_ID",
+                    "value": "node-0a"
+                  },
+                  {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "REPLICATION_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "PGPASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 5432
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "cpu": "700m",
+                    "memory": "512Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3
+                },
+                "startupProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3,
+                  "failureThreshold": 60
+                },
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "scripts",
+                    "mountPath": "/config",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "agent",
+                "image": "erm-storage-node:day2",
+                "imagePullPolicy": "Never",
+                "env": [
+                  {
+                    "name": "ERM_INTERNAL_SECRET",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_INTERNAL_SECRET"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DB_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DATABASE_URL",
+                    "value": "postgres://erm:$(ERM_DB_PASSWORD)@127.0.0.1:5432/erm?sslmode=disable"
+                  },
+                  {
+                    "name": "ERM_NODE_ID",
+                    "value": "node-0a"
+                  },
+                  {
+                    "name": "ERM_SHARD_ID",
+                    "value": "0"
+                  },
+                  {
+                    "name": "ERM_COORDINATOR_URL",
+                    "value": "http://coordinator:8081"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 8082
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "25m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "96Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 10
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "scripts",
+                "configMap": {
+                  "name": "postgres-scripts"
+                }
+              }
+            ]
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data",
+              "labels": {
+                "app": "erm",
+                "node": "node-0a"
+              }
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "node-0b",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-0b"
+        },
+        "ports": [
+          {
+            "name": "http",
+            "port": 8082
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "db-0b",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-0b"
+        },
+        "ports": [
+          {
+            "name": "postgres",
+            "port": 5432
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "node-0b",
+        "namespace": "erm"
+      },
+      "spec": {
+        "serviceName": "node-0b",
+        "replicas": 0,
+        "selector": {
+          "matchLabels": {
+            "app": "erm",
+            "node": "node-0b"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "erm",
+              "node": "node-0b"
+            }
+          },
+          "spec": {
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "db",
+                "image": "postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9",
+                "command": [
+                  "bash",
+                  "/config/start-node.sh"
+                ],
+                "env": [
+                  {
+                    "name": "POSTGRES_USER",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "POSTGRES_DB",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "PGDATA",
+                    "value": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "BOOTSTRAP_ROLE",
+                    "value": "standby"
+                  },
+                  {
+                    "name": "PRIMARY_HOST",
+                    "value": "db-0a"
+                  },
+                  {
+                    "name": "NODE_ID",
+                    "value": "node-0b"
+                  },
+                  {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "REPLICATION_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "PGPASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 5432
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "cpu": "700m",
+                    "memory": "512Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3
+                },
+                "startupProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3,
+                  "failureThreshold": 60
+                },
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "scripts",
+                    "mountPath": "/config",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "agent",
+                "image": "erm-storage-node:day2",
+                "imagePullPolicy": "Never",
+                "env": [
+                  {
+                    "name": "ERM_INTERNAL_SECRET",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_INTERNAL_SECRET"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DB_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DATABASE_URL",
+                    "value": "postgres://erm:$(ERM_DB_PASSWORD)@127.0.0.1:5432/erm?sslmode=disable"
+                  },
+                  {
+                    "name": "ERM_NODE_ID",
+                    "value": "node-0b"
+                  },
+                  {
+                    "name": "ERM_SHARD_ID",
+                    "value": "0"
+                  },
+                  {
+                    "name": "ERM_COORDINATOR_URL",
+                    "value": "http://coordinator:8081"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 8082
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "25m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "96Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 10
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "scripts",
+                "configMap": {
+                  "name": "postgres-scripts"
+                }
+              }
+            ]
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data",
+              "labels": {
+                "app": "erm",
+                "node": "node-0b"
+              }
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "node-1a",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-1a"
+        },
+        "ports": [
+          {
+            "name": "http",
+            "port": 8082
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "db-1a",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-1a"
+        },
+        "ports": [
+          {
+            "name": "postgres",
+            "port": 5432
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "node-1a",
+        "namespace": "erm"
+      },
+      "spec": {
+        "serviceName": "node-1a",
+        "replicas": 0,
+        "selector": {
+          "matchLabels": {
+            "app": "erm",
+            "node": "node-1a"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "erm",
+              "node": "node-1a"
+            }
+          },
+          "spec": {
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "db",
+                "image": "postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9",
+                "command": [
+                  "bash",
+                  "/config/start-node.sh"
+                ],
+                "env": [
+                  {
+                    "name": "POSTGRES_USER",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "POSTGRES_DB",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "PGDATA",
+                    "value": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "BOOTSTRAP_ROLE",
+                    "value": "primary"
+                  },
+                  {
+                    "name": "PRIMARY_HOST",
+                    "value": "db-1a"
+                  },
+                  {
+                    "name": "NODE_ID",
+                    "value": "node-1a"
+                  },
+                  {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "REPLICATION_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "PGPASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 5432
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "cpu": "700m",
+                    "memory": "512Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3
+                },
+                "startupProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3,
+                  "failureThreshold": 60
+                },
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "scripts",
+                    "mountPath": "/config",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "agent",
+                "image": "erm-storage-node:day2",
+                "imagePullPolicy": "Never",
+                "env": [
+                  {
+                    "name": "ERM_INTERNAL_SECRET",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_INTERNAL_SECRET"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DB_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DATABASE_URL",
+                    "value": "postgres://erm:$(ERM_DB_PASSWORD)@127.0.0.1:5432/erm?sslmode=disable"
+                  },
+                  {
+                    "name": "ERM_NODE_ID",
+                    "value": "node-1a"
+                  },
+                  {
+                    "name": "ERM_SHARD_ID",
+                    "value": "1"
+                  },
+                  {
+                    "name": "ERM_COORDINATOR_URL",
+                    "value": "http://coordinator:8081"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 8082
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "25m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "96Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 10
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "scripts",
+                "configMap": {
+                  "name": "postgres-scripts"
+                }
+              }
+            ]
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data",
+              "labels": {
+                "app": "erm",
+                "node": "node-1a"
+              }
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "node-1b",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-1b"
+        },
+        "ports": [
+          {
+            "name": "http",
+            "port": 8082
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "db-1b",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-1b"
+        },
+        "ports": [
+          {
+            "name": "postgres",
+            "port": 5432
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "node-1b",
+        "namespace": "erm"
+      },
+      "spec": {
+        "serviceName": "node-1b",
+        "replicas": 0,
+        "selector": {
+          "matchLabels": {
+            "app": "erm",
+            "node": "node-1b"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "erm",
+              "node": "node-1b"
+            }
+          },
+          "spec": {
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "db",
+                "image": "postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9",
+                "command": [
+                  "bash",
+                  "/config/start-node.sh"
+                ],
+                "env": [
+                  {
+                    "name": "POSTGRES_USER",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "POSTGRES_DB",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "PGDATA",
+                    "value": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "BOOTSTRAP_ROLE",
+                    "value": "standby"
+                  },
+                  {
+                    "name": "PRIMARY_HOST",
+                    "value": "db-1a"
+                  },
+                  {
+                    "name": "NODE_ID",
+                    "value": "node-1b"
+                  },
+                  {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "REPLICATION_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "PGPASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 5432
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "cpu": "700m",
+                    "memory": "512Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3
+                },
+                "startupProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3,
+                  "failureThreshold": 60
+                },
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "scripts",
+                    "mountPath": "/config",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "agent",
+                "image": "erm-storage-node:day2",
+                "imagePullPolicy": "Never",
+                "env": [
+                  {
+                    "name": "ERM_INTERNAL_SECRET",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_INTERNAL_SECRET"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DB_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DATABASE_URL",
+                    "value": "postgres://erm:$(ERM_DB_PASSWORD)@127.0.0.1:5432/erm?sslmode=disable"
+                  },
+                  {
+                    "name": "ERM_NODE_ID",
+                    "value": "node-1b"
+                  },
+                  {
+                    "name": "ERM_SHARD_ID",
+                    "value": "1"
+                  },
+                  {
+                    "name": "ERM_COORDINATOR_URL",
+                    "value": "http://coordinator:8081"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 8082
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "25m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "96Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 10
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "scripts",
+                "configMap": {
+                  "name": "postgres-scripts"
+                }
+              }
+            ]
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data",
+              "labels": {
+                "app": "erm",
+                "node": "node-1b"
+              }
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "node-2a",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-2a"
+        },
+        "ports": [
+          {
+            "name": "http",
+            "port": 8082
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "db-2a",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-2a"
+        },
+        "ports": [
+          {
+            "name": "postgres",
+            "port": 5432
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "node-2a",
+        "namespace": "erm"
+      },
+      "spec": {
+        "serviceName": "node-2a",
+        "replicas": 0,
+        "selector": {
+          "matchLabels": {
+            "app": "erm",
+            "node": "node-2a"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "erm",
+              "node": "node-2a"
+            }
+          },
+          "spec": {
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "db",
+                "image": "postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9",
+                "command": [
+                  "bash",
+                  "/config/start-node.sh"
+                ],
+                "env": [
+                  {
+                    "name": "POSTGRES_USER",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "POSTGRES_DB",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "PGDATA",
+                    "value": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "BOOTSTRAP_ROLE",
+                    "value": "primary"
+                  },
+                  {
+                    "name": "PRIMARY_HOST",
+                    "value": "db-2a"
+                  },
+                  {
+                    "name": "NODE_ID",
+                    "value": "node-2a"
+                  },
+                  {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "REPLICATION_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "PGPASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 5432
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "cpu": "700m",
+                    "memory": "512Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3
+                },
+                "startupProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3,
+                  "failureThreshold": 60
+                },
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "scripts",
+                    "mountPath": "/config",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "agent",
+                "image": "erm-storage-node:day2",
+                "imagePullPolicy": "Never",
+                "env": [
+                  {
+                    "name": "ERM_INTERNAL_SECRET",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_INTERNAL_SECRET"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DB_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DATABASE_URL",
+                    "value": "postgres://erm:$(ERM_DB_PASSWORD)@127.0.0.1:5432/erm?sslmode=disable"
+                  },
+                  {
+                    "name": "ERM_NODE_ID",
+                    "value": "node-2a"
+                  },
+                  {
+                    "name": "ERM_SHARD_ID",
+                    "value": "2"
+                  },
+                  {
+                    "name": "ERM_COORDINATOR_URL",
+                    "value": "http://coordinator:8081"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 8082
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "25m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "96Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 10
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "scripts",
+                "configMap": {
+                  "name": "postgres-scripts"
+                }
+              }
+            ]
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data",
+              "labels": {
+                "app": "erm",
+                "node": "node-2a"
+              }
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "node-2b",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-2b"
+        },
+        "ports": [
+          {
+            "name": "http",
+            "port": 8082
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "db-2b",
+        "namespace": "erm"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "node": "node-2b"
+        },
+        "ports": [
+          {
+            "name": "postgres",
+            "port": 5432
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "node-2b",
+        "namespace": "erm"
+      },
+      "spec": {
+        "serviceName": "node-2b",
+        "replicas": 0,
+        "selector": {
+          "matchLabels": {
+            "app": "erm",
+            "node": "node-2b"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "erm",
+              "node": "node-2b"
+            }
+          },
+          "spec": {
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "db",
+                "image": "postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9",
+                "command": [
+                  "bash",
+                  "/config/start-node.sh"
+                ],
+                "env": [
+                  {
+                    "name": "POSTGRES_USER",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "POSTGRES_DB",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "PGDATA",
+                    "value": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "BOOTSTRAP_ROLE",
+                    "value": "standby"
+                  },
+                  {
+                    "name": "PRIMARY_HOST",
+                    "value": "db-2a"
+                  },
+                  {
+                    "name": "NODE_ID",
+                    "value": "node-2b"
+                  },
+                  {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "REPLICATION_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "PGPASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_REPLICATION_PASSWORD"
+                      }
+                    }
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 5432
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "cpu": "700m",
+                    "memory": "512Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3
+                },
+                "startupProbe": {
+                  "exec": {
+                    "command": [
+                      "pg_isready",
+                      "-h",
+                      "127.0.0.1",
+                      "-U",
+                      "erm",
+                      "-d",
+                      "erm"
+                    ]
+                  },
+                  "periodSeconds": 3,
+                  "failureThreshold": 60
+                },
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/postgresql/data"
+                  },
+                  {
+                    "name": "scripts",
+                    "mountPath": "/config",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "agent",
+                "image": "erm-storage-node:day2",
+                "imagePullPolicy": "Never",
+                "env": [
+                  {
+                    "name": "ERM_INTERNAL_SECRET",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_INTERNAL_SECRET"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DB_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_DB_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_DATABASE_URL",
+                    "value": "postgres://erm:$(ERM_DB_PASSWORD)@127.0.0.1:5432/erm?sslmode=disable"
+                  },
+                  {
+                    "name": "ERM_NODE_ID",
+                    "value": "node-2b"
+                  },
+                  {
+                    "name": "ERM_SHARD_ID",
+                    "value": "2"
+                  },
+                  {
+                    "name": "ERM_COORDINATOR_URL",
+                    "value": "http://coordinator:8081"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 8082
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "25m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "96Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8082
+                  },
+                  "periodSeconds": 10
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "scripts",
+                "configMap": {
+                  "name": "postgres-scripts"
+                }
+              }
+            ]
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data",
+              "labels": {
+                "app": "erm",
+                "node": "node-2b"
+              }
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -23,6 +23,7 @@ type observation struct {
 	Received time.Time  `json:"received"`
 }
 type Registry struct {
+	Control *Control
 	mu      sync.RWMutex
 	now     func() time.Time
 	nodes   map[string]observation
@@ -111,6 +112,13 @@ func (r *Registry) Handler(next http.Handler, secret string) http.Handler {
 			json.NewEncoder(w).Encode(map[string]string{"code": "REGISTRATION_REQUIRED"})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+		var version uint64
+		if r.Control != nil {
+			route := r.Control.Route(report.Shard)
+			if route.NodeID == report.NodeID && r.Writable(report.NodeID) {
+				version = route.Version
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"status": "accepted", "routeVersion": version})
 	})
 }

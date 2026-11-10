@@ -1,0 +1,45 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {
+    "name": "initialize-control",
+    "namespace": "erm"
+  },
+  "spec": {
+    "backoffLimit": 0,
+    "template": {
+      "spec": {
+        "restartPolicy": "Never",
+        "securityContext": {
+          "runAsUser": 65532,
+          "fsGroup": 65532
+        },
+        "containers": [
+          {
+            "name": "initialize",
+            "image": "erm-coordinator:day2",
+            "imagePullPolicy": "Never",
+            "args": [
+              "init-control",
+              "/control/routes.json"
+            ],
+            "volumeMounts": [
+              {
+                "name": "control",
+                "mountPath": "/control"
+              }
+            ]
+          }
+        ],
+        "volumes": [
+          {
+            "name": "control",
+            "persistentVolumeClaim": {
+              "claimName": "coordinator-control"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

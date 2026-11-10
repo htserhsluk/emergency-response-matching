@@ -1,0 +1,307 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "coordinator-control",
+        "namespace": "erm"
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteOnce"
+        ],
+        "resources": {
+          "requests": {
+            "storage": "2Gi"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "recovery-archive",
+        "namespace": "erm"
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteOnce"
+        ],
+        "resources": {
+          "requests": {
+            "storage": "2Gi"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "coordinator",
+        "namespace": "erm"
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "erm",
+            "service": "coordinator"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "erm",
+              "service": "coordinator"
+            }
+          },
+          "spec": {
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 65532,
+              "fsGroup": 65532
+            },
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "coordinator",
+                "image": "erm-coordinator:day2",
+                "imagePullPolicy": "Never",
+                "env": [
+                  {
+                    "name": "ERM_INTERNAL_SECRET",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_INTERNAL_SECRET"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_CONTROL_FILE",
+                    "value": "/control/routes.json"
+                  },
+                  {
+                    "name": "ERM_NODE_0a_URL",
+                    "value": "http://node-0a:8082"
+                  },
+                  {
+                    "name": "ERM_NODE_0b_URL",
+                    "value": "http://node-0b:8082"
+                  },
+                  {
+                    "name": "ERM_NODE_1a_URL",
+                    "value": "http://node-1a:8082"
+                  },
+                  {
+                    "name": "ERM_NODE_1b_URL",
+                    "value": "http://node-1b:8082"
+                  },
+                  {
+                    "name": "ERM_NODE_2a_URL",
+                    "value": "http://node-2a:8082"
+                  },
+                  {
+                    "name": "ERM_NODE_2b_URL",
+                    "value": "http://node-2b:8082"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 8081
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "48Mi"
+                  },
+                  "limits": {
+                    "cpu": "500m",
+                    "memory": "192Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health/ready",
+                    "port": 8081
+                  },
+                  "periodSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8081
+                  },
+                  "periodSeconds": 10
+                },
+                "volumeMounts": [
+                  {
+                    "name": "control",
+                    "mountPath": "/control"
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "name": "control",
+                "persistentVolumeClaim": {
+                  "claimName": "coordinator-control"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "coordinator",
+        "namespace": "erm"
+      },
+      "spec": {
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app": "erm",
+          "service": "coordinator"
+        },
+        "ports": [
+          {
+            "port": 8081
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "api",
+        "namespace": "erm"
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "erm",
+            "service": "api"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "erm",
+              "service": "api"
+            }
+          },
+          "spec": {
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 65532,
+              "fsGroup": 65532
+            },
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "api",
+                "image": "erm-api:day2",
+                "imagePullPolicy": "Never",
+                "env": [
+                  {
+                    "name": "ERM_INTERNAL_SECRET",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_INTERNAL_SECRET"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_COORDINATOR_URL",
+                    "value": "http://coordinator:8081"
+                  },
+                  {
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_BROKER_PASSWORD"
+                      }
+                    },
+                    "name": "ERM_BROKER_PASSWORD"
+                  },
+                  {
+                    "value": "amqp://erm:$(ERM_BROKER_PASSWORD)@broker:5672/",
+                    "name": "ERM_AMQP_URL"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "48Mi"
+                  },
+                  "limits": {
+                    "cpu": "500m",
+                    "memory": "192Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8080
+                  },
+                  "periodSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "api",
+        "namespace": "erm"
+      },
+      "spec": {
+        "publishNotReadyAddresses": false,
+        "selector": {
+          "app": "erm",
+          "service": "api"
+        },
+        "ports": [
+          {
+            "port": 8080
+          }
+        ]
+      }
+    }
+  ]
+}

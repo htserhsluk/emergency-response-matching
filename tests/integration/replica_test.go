@@ -14,6 +14,103 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/storage"
 )
 
+func TestOutboxClaimRequiresReplayBarrier(t *testing.T) {
+	store, pool := resourceFixture(t)
+	ctx := context.Background()
+	request, err := store.Create(ctx, "outbox-barrier-request-0001", body())
+	if err != nil {
+		t.Fatal(err)
+	}
+	standby, err := storage.Open(ctx, os.Getenv("ERM_TEST_STANDBY_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Close()
+	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_pause()"); err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Exec(context.Background(), "SELECT pg_wal_replay_resume()")
+	attempt := func(token string) {
+		t.Helper()
+		limited, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		defer cancel()
+		rows, err := store.ClaimOutbox(limited, token)
+		if err == nil || len(rows) != 0 {
+			t.Fatalf("unconfirmed claim escaped: %+v %v", rows, err)
+		}
+	}
+	attempt("paused-claim-token-00001")
+	var visible int
+	if err = pool.QueryRow(ctx, "SELECT count(*) FROM outbox_events WHERE claim_token IS NOT NULL").Scan(&visible); err != nil || visible != 1 {
+		t.Fatalf("ambiguous claim not locally visible %d %v", visible, err)
+	}
+	// Advance only the lease fixture without claiming synchronous durability.
+	if _, err = pool.Exec(ctx, "BEGIN; SET LOCAL synchronous_commit=local; UPDATE outbox_events SET claim_until=clock_timestamp()-interval '1 second'; COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	attempt("paused-claim-token-00002")
+	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_resume()"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, "UPDATE outbox_events SET claim_until=clock_timestamp()-interval '1 second'"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.ClaimOutbox(ctx, "confirmed-claim-token-0003")
+	if err != nil || len(rows) != 1 || rows[0].Event.RequestID != request.ID {
+		t.Fatalf("confirmed claim %+v %v", rows, err)
+	}
+}
+
+func TestReservationAndIntentReplaysRequireBarrier(t *testing.T) {
+	store, _ := resourceFixture(t)
+	ctx := context.Background()
+	resource, err := store.RegisterResource(ctx, "reserve-barrier-resource-0001", resourceBody(0, 0, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := store.Create(ctx, "reserve-barrier-request-0001", body())
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := contracts.IntentCommand{AssignmentID: fmt.Sprintf("%032x", 0xabc01), RequestID: request.ID, ResourceID: resource.ID, Generation: 1}
+	if _, err = store.BeginIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	reserve := contracts.ReserveCommand{AssignmentID: intent.AssignmentID, RequestID: request.ID, ResourceID: resource.ID}
+	if _, err = store.Reserve(ctx, reserve); err != nil {
+		t.Fatal(err)
+	}
+	rejected := reserve
+	rejected.AssignmentID = fmt.Sprintf("%032x", 0xabc02)
+	rejected.RequestID = fmt.Sprintf("%032x", 0xabc03)
+	if out, err := store.Reserve(ctx, rejected); err != nil || out.Status != "REJECTED" {
+		t.Fatalf("rejection %+v %v", out, err)
+	}
+	standby, err := storage.Open(ctx, os.Getenv("ERM_TEST_STANDBY_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Close()
+	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_pause()"); err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Exec(context.Background(), "SELECT pg_wal_replay_resume()")
+	for _, cmd := range []contracts.ReserveCommand{reserve, rejected} {
+		limited, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		_, err := store.Reserve(limited, cmd)
+		cancel()
+		if err == nil {
+			t.Fatal("unconfirmed reservation replay escaped")
+		}
+	}
+	limited, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	_, err = store.BeginIntent(limited, intent)
+	cancel()
+	if err == nil {
+		t.Fatal("unconfirmed intent replay escaped")
+	}
+}
+
 func TestReplayRequiresSynchronousBarrier(t *testing.T) {
 	store, primary := fixture(t)
 	url := os.Getenv("ERM_TEST_STANDBY_URL")

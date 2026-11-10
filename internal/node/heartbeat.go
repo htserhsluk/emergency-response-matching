@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func Heartbeats(ctx context.Context, pool *pgxpool.Pool, url, secret, id string, shard int) {
+func Heartbeats(ctx context.Context, pool *pgxpool.Pool, url, secret, id string, shard int, gate *Gate) {
 	var boot [16]byte
 	_, _ = rand.Read(boot[:])
 	report := coordinator.NodeReport{NodeID: id, Shard: shard, BootID: hex.EncodeToString(boot[:])}
@@ -45,6 +45,14 @@ func Heartbeats(ctx context.Context, pool *pgxpool.Pool, url, secret, id string,
 			resp, err := client.Do(req)
 			if err == nil {
 				registered = resp.StatusCode == 200
+				var activation struct {
+					Version uint64 `json:"routeVersion"`
+				}
+				if registered && json.NewDecoder(resp.Body).Decode(&activation) == nil && gate != nil {
+					gate.Activate(activation.Version)
+				} else if gate != nil {
+					gate.Activate(0)
+				}
 				resp.Body.Close()
 			} else {
 				registered = false
