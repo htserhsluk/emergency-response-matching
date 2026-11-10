@@ -89,6 +89,18 @@ func NewServer(store Requests, secret string, internal bool) http.Handler {
 			path = strings.TrimPrefix(path, "/internal")
 		}
 		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) > 0 && (parts[0] == "match" || (internal && parts[0] == "commands")) {
+			serveCommands(w, r, store, parts, internal)
+			return
+		}
+		if internal && len(parts) > 0 && parts[0] == "data" {
+			serveData(w, r, store, parts)
+			return
+		}
+		if len(parts) > 0 && (parts[0] == "resources" || (internal && parts[0] == "search")) {
+			serveResources(w, r, store, parts, internal)
+			return
+		}
 		if len(parts) == 0 || parts[0] != "requests" || len(parts) > 3 || (len(parts) == 3 && parts[2] != "status") {
 			fail(w, contracts.ErrNotFound, "")
 			return

@@ -1,0 +1,42 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {
+    "name": "migrate-__NODE__",
+    "namespace": "erm"
+  },
+  "spec": {
+    "backoffLimit": 0,
+    "template": {
+      "spec": {
+        "restartPolicy": "Never",
+        "containers": [
+          {
+            "name": "migrate",
+            "image": "erm-migrate:day2",
+            "imagePullPolicy": "Never",
+            "env": [
+              {
+                "name": "ERM_DB_PASSWORD",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "name": "erm-config",
+                    "key": "ERM_DB_PASSWORD"
+                  }
+                }
+              },
+              {
+                "name": "GOOSE_DRIVER",
+                "value": "postgres"
+              },
+              {
+                "name": "GOOSE_DBSTRING",
+                "value": "postgres://erm:$(ERM_DB_PASSWORD)@db-__NODE__:5432/erm?sslmode=disable"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

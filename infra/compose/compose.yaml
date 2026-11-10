@@ -1,7 +1,7 @@
 name: erm-dev
 services:
   api:
-    image: erm-api:day1
+    image: erm-api:day2
     build:
       context: ../..
       dockerfile: infra/Dockerfile
@@ -9,27 +9,33 @@ services:
     environment:
       ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET:?Set internal secret}
       ERM_COORDINATOR_URL: http://coordinator:8081
+      ERM_AMQP_URL: amqp://erm:${ERM_BROKER_PASSWORD}@broker:5672/
     ports: ["127.0.0.1:8080:8080"]
-    depends_on: [coordinator]
   coordinator:
-    image: erm-coordinator:day1
+    image: erm-coordinator:day2
     build:
       context: ../..
       dockerfile: infra/Dockerfile
       args: {SERVICE: coordinator}
     environment:
       ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET:?Set internal secret}
-      ERM_SHARD_0_URL: http://node-0a:8082
-      ERM_SHARD_0_NODE: node-0a
-    depends_on: [node-0a]
+      ERM_CONTROL_FILE: /control/routes.json
+      ERM_NODE_0a_URL: http://node-0a:8082
+      ERM_NODE_0b_URL: http://node-0b:8082
+      ERM_NODE_1a_URL: http://node-1a:8082
+      ERM_NODE_1b_URL: http://node-1b:8082
+      ERM_NODE_2a_URL: http://node-2a:8082
+      ERM_NODE_2b_URL: http://node-2b:8082
+    ports: ["127.0.0.1:8081:8081"]
+    volumes: [coordinator-control:/control]
   node-0a:
-    image: erm-storage-node:day1
+    image: erm-storage-node:day2
     build:
       context: ../..
       dockerfile: infra/Dockerfile
       args: {SERVICE: storage-node}
     environment:
-      ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET:?Set internal secret}
+      ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET}
       ERM_DATABASE_URL: postgres://erm:${ERM_DB_PASSWORD}@db-0a:5432/erm?sslmode=disable
       ERM_NODE_ID: node-0a
       ERM_SHARD_ID: "0"
@@ -38,43 +44,28 @@ services:
       db-0a: {condition: service_healthy}
   db-0a:
     image: postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9
+    entrypoint: [bash, /config/start-node.sh]
     environment:
       POSTGRES_USER: erm
-      POSTGRES_PASSWORD: ${ERM_DB_PASSWORD:?Set ERM_DB_PASSWORD in local environment}
+      POSTGRES_PASSWORD: ${ERM_DB_PASSWORD:?Set DB password}
       POSTGRES_DB: erm
-      REPLICATION_PASSWORD: ${ERM_REPLICATION_PASSWORD:?Set replication secret}
-    ports:
-      - "127.0.0.1:55432:5432"
+      REPLICATION_PASSWORD: ${ERM_REPLICATION_PASSWORD:?Set replication password}
+      PGPASSWORD: ${ERM_REPLICATION_PASSWORD}
+      PGDATA: /var/lib/postgresql/data
+      BOOTSTRAP_ROLE: primary
+      PRIMARY_HOST: db-0a
+      NODE_ID: node-0a
+    ports: ["127.0.0.1:55432:5432"]
     volumes:
       - db-0a:/var/lib/postgresql/data
       - ../postgres:/config:ro
-    command: [postgres, -c, wal_level=replica, -c, max_wal_senders=5, -c, max_replication_slots=5, -c, max_slot_wal_keep_size=256MB]
     healthcheck:
-      test: [CMD-SHELL, "pg_isready -U erm -d erm"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
-  db-0b:
-    profiles: [replica]
-    image: postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9
-    entrypoint: [bash, /config/standby.sh]
-    environment:
-      PGDATA: /var/lib/postgresql/data
-      PGPASSWORD: ${ERM_REPLICATION_PASSWORD:?Set replication secret}
-    ports: ["127.0.0.1:55433:5432"]
-    volumes:
-      - db-0b:/var/lib/postgresql/data
-      - ../postgres:/config:ro
-    depends_on:
-      db-0a: {condition: service_healthy}
-    healthcheck:
-      test: [CMD-SHELL, "pg_isready -U erm -d erm"]
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U erm -d erm"]
       interval: 2s
       timeout: 2s
       retries: 30
   node-0b:
-    profiles: [replica]
-    image: erm-storage-node:day1
+    image: erm-storage-node:day2
     environment:
       ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET}
       ERM_DATABASE_URL: postgres://erm:${ERM_DB_PASSWORD}@db-0b:5432/erm?sslmode=disable
@@ -83,6 +74,176 @@ services:
       ERM_COORDINATOR_URL: http://coordinator:8081
     depends_on:
       db-0b: {condition: service_healthy}
+  db-0b:
+    image: postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9
+    entrypoint: [bash, /config/start-node.sh]
+    environment:
+      POSTGRES_USER: erm
+      POSTGRES_PASSWORD: ${ERM_DB_PASSWORD:?Set DB password}
+      POSTGRES_DB: erm
+      REPLICATION_PASSWORD: ${ERM_REPLICATION_PASSWORD:?Set replication password}
+      PGPASSWORD: ${ERM_REPLICATION_PASSWORD}
+      PGDATA: /var/lib/postgresql/data
+      BOOTSTRAP_ROLE: standby
+      PRIMARY_HOST: db-0a
+      NODE_ID: node-0b
+    ports: ["127.0.0.1:55433:5432"]
+    volumes:
+      - db-0b:/var/lib/postgresql/data
+      - ../postgres:/config:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U erm -d erm"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  node-1a:
+    image: erm-storage-node:day2
+    environment:
+      ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET}
+      ERM_DATABASE_URL: postgres://erm:${ERM_DB_PASSWORD}@db-1a:5432/erm?sslmode=disable
+      ERM_NODE_ID: node-1a
+      ERM_SHARD_ID: "1"
+      ERM_COORDINATOR_URL: http://coordinator:8081
+    depends_on:
+      db-1a: {condition: service_healthy}
+  db-1a:
+    image: postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9
+    entrypoint: [bash, /config/start-node.sh]
+    environment:
+      POSTGRES_USER: erm
+      POSTGRES_PASSWORD: ${ERM_DB_PASSWORD:?Set DB password}
+      POSTGRES_DB: erm
+      REPLICATION_PASSWORD: ${ERM_REPLICATION_PASSWORD:?Set replication password}
+      PGPASSWORD: ${ERM_REPLICATION_PASSWORD}
+      PGDATA: /var/lib/postgresql/data
+      BOOTSTRAP_ROLE: primary
+      PRIMARY_HOST: db-1a
+      NODE_ID: node-1a
+    ports: ["127.0.0.1:55434:5432"]
+    volumes:
+      - db-1a:/var/lib/postgresql/data
+      - ../postgres:/config:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U erm -d erm"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  node-1b:
+    image: erm-storage-node:day2
+    environment:
+      ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET}
+      ERM_DATABASE_URL: postgres://erm:${ERM_DB_PASSWORD}@db-1b:5432/erm?sslmode=disable
+      ERM_NODE_ID: node-1b
+      ERM_SHARD_ID: "1"
+      ERM_COORDINATOR_URL: http://coordinator:8081
+    depends_on:
+      db-1b: {condition: service_healthy}
+  db-1b:
+    image: postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9
+    entrypoint: [bash, /config/start-node.sh]
+    environment:
+      POSTGRES_USER: erm
+      POSTGRES_PASSWORD: ${ERM_DB_PASSWORD:?Set DB password}
+      POSTGRES_DB: erm
+      REPLICATION_PASSWORD: ${ERM_REPLICATION_PASSWORD:?Set replication password}
+      PGPASSWORD: ${ERM_REPLICATION_PASSWORD}
+      PGDATA: /var/lib/postgresql/data
+      BOOTSTRAP_ROLE: standby
+      PRIMARY_HOST: db-1a
+      NODE_ID: node-1b
+    ports: ["127.0.0.1:55435:5432"]
+    volumes:
+      - db-1b:/var/lib/postgresql/data
+      - ../postgres:/config:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U erm -d erm"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  node-2a:
+    image: erm-storage-node:day2
+    environment:
+      ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET}
+      ERM_DATABASE_URL: postgres://erm:${ERM_DB_PASSWORD}@db-2a:5432/erm?sslmode=disable
+      ERM_NODE_ID: node-2a
+      ERM_SHARD_ID: "2"
+      ERM_COORDINATOR_URL: http://coordinator:8081
+    depends_on:
+      db-2a: {condition: service_healthy}
+  db-2a:
+    image: postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9
+    entrypoint: [bash, /config/start-node.sh]
+    environment:
+      POSTGRES_USER: erm
+      POSTGRES_PASSWORD: ${ERM_DB_PASSWORD:?Set DB password}
+      POSTGRES_DB: erm
+      REPLICATION_PASSWORD: ${ERM_REPLICATION_PASSWORD:?Set replication password}
+      PGPASSWORD: ${ERM_REPLICATION_PASSWORD}
+      PGDATA: /var/lib/postgresql/data
+      BOOTSTRAP_ROLE: primary
+      PRIMARY_HOST: db-2a
+      NODE_ID: node-2a
+    ports: ["127.0.0.1:55436:5432"]
+    volumes:
+      - db-2a:/var/lib/postgresql/data
+      - ../postgres:/config:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U erm -d erm"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  node-2b:
+    image: erm-storage-node:day2
+    environment:
+      ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET}
+      ERM_DATABASE_URL: postgres://erm:${ERM_DB_PASSWORD}@db-2b:5432/erm?sslmode=disable
+      ERM_NODE_ID: node-2b
+      ERM_SHARD_ID: "2"
+      ERM_COORDINATOR_URL: http://coordinator:8081
+    depends_on:
+      db-2b: {condition: service_healthy}
+  db-2b:
+    image: postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9
+    entrypoint: [bash, /config/start-node.sh]
+    environment:
+      POSTGRES_USER: erm
+      POSTGRES_PASSWORD: ${ERM_DB_PASSWORD:?Set DB password}
+      POSTGRES_DB: erm
+      REPLICATION_PASSWORD: ${ERM_REPLICATION_PASSWORD:?Set replication password}
+      PGPASSWORD: ${ERM_REPLICATION_PASSWORD}
+      PGDATA: /var/lib/postgresql/data
+      BOOTSTRAP_ROLE: standby
+      PRIMARY_HOST: db-2a
+      NODE_ID: node-2b
+    ports: ["127.0.0.1:55437:5432"]
+    volumes:
+      - db-2b:/var/lib/postgresql/data
+      - ../postgres:/config:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U erm -d erm"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  broker:
+    image: rabbitmq:4.4.0-management@sha256:af6f50d38098d8bd52fef7f3fa85015dd8b2bf6def58e995bf584ae9ba0f6407
+    hostname: broker
+    environment:
+      RABBITMQ_DEFAULT_USER: erm
+      RABBITMQ_DEFAULT_PASS: ${ERM_BROKER_PASSWORD:?Set broker password}
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: '+S 2:2'
+    ports: ["127.0.0.1:5672:5672", "127.0.0.1:15672:15672"]
+    volumes: [broker-data:/var/lib/rabbitmq]
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 5s
+      timeout: 5s
+      retries: 30
 volumes:
+  broker-data:
+  coordinator-control:
   db-0a:
   db-0b:
+  db-1a:
+  db-1b:
+  db-2a:
+  db-2b:

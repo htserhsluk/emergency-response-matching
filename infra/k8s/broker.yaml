@@ -1,0 +1,143 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "broker",
+        "namespace": "erm"
+      },
+      "spec": {
+        "selector": {
+          "app": "erm",
+          "service": "broker"
+        },
+        "ports": [
+          {
+            "name": "amqp",
+            "port": 5672
+          },
+          {
+            "name": "management",
+            "port": 15672
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "broker",
+        "namespace": "erm"
+      },
+      "spec": {
+        "serviceName": "broker",
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "erm",
+            "service": "broker"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "erm",
+              "service": "broker"
+            }
+          },
+          "spec": {
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "broker",
+                "image": "rabbitmq:4.4.0-management@sha256:af6f50d38098d8bd52fef7f3fa85015dd8b2bf6def58e995bf584ae9ba0f6407",
+                "env": [
+                  {
+                    "name": "RABBITMQ_DEFAULT_USER",
+                    "value": "erm"
+                  },
+                  {
+                    "name": "RABBITMQ_DEFAULT_PASS",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_BROKER_PASSWORD"
+                      }
+                    }
+                  },
+                  {
+                    "name": "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS",
+                    "value": "+S 2:2"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 5672
+                  },
+                  {
+                    "containerPort": 15672
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "cpu": "700m",
+                    "memory": "512Mi"
+                  }
+                },
+                "startupProbe": {
+                  "exec": {
+                    "command": [
+                      "rabbitmq-diagnostics",
+                      "-q",
+                      "ping"
+                    ]
+                  },
+                  "timeoutSeconds": 10,
+                  "periodSeconds": 15,
+                  "failureThreshold": 30
+                },
+                "readinessProbe": {
+                  "tcpSocket": {
+                    "port": 5672
+                  },
+                  "periodSeconds": 5
+                },
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/rabbitmq"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -8,6 +8,8 @@ import (
 )
 
 type Router struct {
+	Control  *Control
+	Topology map[string]*httpapp.Client
 	nodes    [3]*httpapp.Client
 	Registry *Registry
 	NodeIDs  [3]string
@@ -26,6 +28,17 @@ func (r *Router) node(id string) (*httpapp.Client, error) {
 	shard, err := routing.ShardFor(id)
 	if err != nil {
 		return nil, contracts.ErrInvalid
+	}
+	return r.shardNode(shard)
+}
+func (r *Router) shardNode(shard int) (*httpapp.Client, error) {
+	if r.Control != nil {
+		route := r.Control.Route(shard)
+		n := r.Topology[route.NodeID]
+		if n == nil || r.Registry == nil || !r.Registry.Writable(route.NodeID) {
+			return nil, contracts.ErrUnavailable
+		}
+		return n.WithVersion(route.Version), nil
 	}
 	if r.nodes[shard] == nil {
 		return nil, contracts.ErrUnavailable
@@ -57,6 +70,18 @@ func (r *Router) SetStatus(ctx context.Context, id, key, status string) (contrac
 	return n.SetStatus(ctx, id, key, status)
 }
 func (r *Router) Health(ctx context.Context) error {
+	if r.Control != nil {
+		for i := range 3 {
+			n, err := r.shardNode(i)
+			if err != nil {
+				return err
+			}
+			if err = n.Health(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	count := 0
 	for i, n := range r.nodes {
 		if n != nil {

@@ -103,13 +103,13 @@ func (s *Store) Create(ctx context.Context, key string, c contracts.CreateReques
 	}
 	eventID := contracts.EntityID("match-event", id+":1")
 	payload, _ := json.Marshal(map[string]any{"schemaVersion": 1, "eventId": eventID, "requestId": id, "generation": 1, "createdAt": out.CreatedAt})
-	if _, err = tx.Exec(ctx, `INSERT INTO outbox_events(event_id,request_id,generation,payload) VALUES($1,$2,1,$3)`, eventID, id, payload); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO outbox_events(event_id,request_id,generation,payload,delivery_id) VALUES($1,$2,1,$3,$4)`, eventID, id, payload, contracts.DeliveryID(eventID, 0, "request.match")); err != nil {
 		return out, err
 	}
 	return out, commit(ctx, tx)
 }
 
-func replay(ctx context.Context, tx pgx.Tx, id, kind, key, hash string, out *contracts.Request) (bool, error) {
+func replay(ctx context.Context, tx pgx.Tx, id, kind, key, hash string, out any) (bool, error) {
 	var stored string
 	var data []byte
 	err := tx.QueryRow(ctx, `SELECT payload_hash,result FROM operations WHERE entity_id=$1 AND kind=$2 AND operation_key=$3 FOR UPDATE`, id, kind, key).Scan(&stored, &data)
@@ -132,7 +132,7 @@ func replay(ctx context.Context, tx pgx.Tx, id, kind, key, hash string, out *con
 	}
 	return true, err
 }
-func record(ctx context.Context, tx pgx.Tx, id, kind, key, hash string, out contracts.Request) error {
+func record(ctx context.Context, tx pgx.Tx, id, kind, key, hash string, out any) error {
 	data, err := json.Marshal(out)
 	if err != nil {
 		return err
