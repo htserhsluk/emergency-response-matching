@@ -46,6 +46,29 @@ func (p *Publisher) PublishConfirmed(parent context.Context, d contracts.Deliver
 	if d.Event.Validate() != nil || d.DeliveryID == "" || d.Destination == "" || d.RetryNumber < 0 {
 		return contracts.ErrInvalid
 	}
+	body, err := json.Marshal(d.Event)
+	if err != nil {
+		return contracts.ErrInvalid
+	}
+	exchange := "emergency.events"
+	if d.Destination == "request.dead" {
+		exchange = "emergency.dead"
+	}
+	return p.publish(parent, exchange, d.Destination, amqp.Publishing{ContentType: "application/json", DeliveryMode: amqp.Persistent, MessageId: d.DeliveryID, Headers: amqp.Table{"retryNumber": int32(d.RetryNumber)}, Body: body})
+}
+
+func (p *Publisher) PublishDead(ctx context.Context, id string, raw []byte, reason string) error {
+	body, err := json.Marshal(struct {
+		Reason  string `json:"reason"`
+		Payload []byte `json:"payload"`
+	}{reason, raw})
+	if err != nil {
+		return err
+	}
+	return p.publish(ctx, "emergency.dead", "request.dead", amqp.Publishing{ContentType: "application/json", DeliveryMode: amqp.Persistent, MessageId: id, Body: body})
+}
+
+func (p *Publisher) publish(parent context.Context, exchange, destination string, message amqp.Publishing) error {
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	select {
@@ -90,15 +113,7 @@ func (p *Publisher) PublishConfirmed(parent context.Context, d contracts.Deliver
 	if err = channel.Confirm(false); err != nil {
 		return contracts.ErrUnavailable
 	}
-	body, err := json.Marshal(d.Event)
-	if err != nil {
-		return contracts.ErrInvalid
-	}
-	exchange := "emergency.events"
-	if d.Destination == "request.dead" {
-		exchange = "emergency.dead"
-	}
-	if err = channel.PublishWithContext(ctx, exchange, d.Destination, true, false, amqp.Publishing{ContentType: "application/json", DeliveryMode: amqp.Persistent, MessageId: d.DeliveryID, Headers: amqp.Table{"retryNumber": int32(d.RetryNumber)}, Body: body}); err != nil {
+	if err = channel.PublishWithContext(ctx, exchange, destination, true, false, message); err != nil {
 		return contracts.ErrUnavailable
 	}
 	select {

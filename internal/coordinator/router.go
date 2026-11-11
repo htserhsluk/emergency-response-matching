@@ -5,9 +5,12 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/contracts"
 	"github.com/htserhsluk/emergency-response-matching/internal/httpapp"
 	"github.com/htserhsluk/emergency-response-matching/internal/routing"
+	"sync"
 )
 
 type Router struct {
+	lockInit sync.Once
+	locks    [256]chan struct{}
 	Control  *Control
 	Topology map[string]*httpapp.Client
 	nodes    [3]*httpapp.Client
@@ -63,6 +66,11 @@ func (r *Router) Get(ctx context.Context, id string) (contracts.Request, error) 
 	return n.Get(ctx, id)
 }
 func (r *Router) SetStatus(ctx context.Context, id, key, status string) (contracts.Request, error) {
+	unlock, err := r.lockRequest(ctx, id)
+	if err != nil {
+		return contracts.Request{}, err
+	}
+	defer unlock()
 	n, err := r.node(id)
 	if err != nil {
 		return contracts.Request{}, err

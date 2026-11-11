@@ -13,7 +13,7 @@
         "containers": [
           {
             "name": "migrate",
-            "image": "erm-migrate:day2",
+            "image": "erm-migrate:day3",
             "imagePullPolicy": "Never",
             "env": [
               {

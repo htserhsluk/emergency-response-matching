@@ -190,7 +190,7 @@
               },
               {
                 "name": "agent",
-                "image": "erm-storage-node:day2",
+                "image": "erm-storage-node:day3",
                 "imagePullPolicy": "Never",
                 "env": [
                   {
@@ -480,7 +480,7 @@
               },
               {
                 "name": "agent",
-                "image": "erm-storage-node:day2",
+                "image": "erm-storage-node:day3",
                 "imagePullPolicy": "Never",
                 "env": [
                   {
@@ -770,7 +770,7 @@
               },
               {
                 "name": "agent",
-                "image": "erm-storage-node:day2",
+                "image": "erm-storage-node:day3",
                 "imagePullPolicy": "Never",
                 "env": [
                   {
@@ -1060,7 +1060,7 @@
               },
               {
                 "name": "agent",
-                "image": "erm-storage-node:day2",
+                "image": "erm-storage-node:day3",
                 "imagePullPolicy": "Never",
                 "env": [
                   {
@@ -1350,7 +1350,7 @@
               },
               {
                 "name": "agent",
-                "image": "erm-storage-node:day2",
+                "image": "erm-storage-node:day3",
                 "imagePullPolicy": "Never",
                 "env": [
                   {
@@ -1640,7 +1640,7 @@
               },
               {
                 "name": "agent",
-                "image": "erm-storage-node:day2",
+                "image": "erm-storage-node:day3",
                 "imagePullPolicy": "Never",
                 "env": [
                   {

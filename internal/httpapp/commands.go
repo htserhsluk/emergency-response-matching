@@ -24,6 +24,10 @@ type sentCommand struct {
 }
 
 func serveCommands(w http.ResponseWriter, r *http.Request, s Requests, parts []string, internal bool) {
+	if internal && len(parts) == 2 && parts[0] == "commands" && (parts[1] == "workflow" || parts[1] == "handle" || parts[1] == "pending" || parts[1] == "candidate" || parts[1] == "reservation-intent") {
+		serveWorkflow(w, r, s, parts[1])
+		return
+	}
 	if r.Method != "POST" {
 		write(w, 405, contracts.Error{Code: "METHOD_NOT_ALLOWED", Message: "Method not allowed"})
 		return

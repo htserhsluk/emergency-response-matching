@@ -32,3 +32,23 @@ This is controlled failover for a local demonstration, not automatic elections o
 ## Stop and resume
 
 Stop active test scripts first, then stop project Compose services or the Minikube profile. Quit Docker Desktop only after those operations complete. Restart Docker Desktop, start the existing profile and use the saved routes on resume. Do not run `down -v`, delete PVCs, factory-reset Docker or reinitialize control to recover from a routine shutdown.
+
+## Matching workflow recovery
+
+A PAUSED workflow is not a successful match and does not release any resource. Inspect `processed_events` (state, expected_retry, due_at, last_error), `assignment_attempts`, and `reservation_results` on their owning shards. The request and resource can be on different shards. Never clear these rows or create a replacement intent to resolve an uncertain reservation.
+
+For a deliberate re-drive, obtain the paused event's current delivery on the active request shard:
+
+```sql
+SELECT jsonb_build_object(
+  'event', o.payload, 'deliveryId', o.delivery_id,
+  'retryNumber', o.retry_number, 'destination', o.destination)
+FROM processed_events p
+JOIN outbox_events o ON o.event_id=p.event_id
+ AND o.retry_number=p.expected_retry AND o.destination='request.match'
+WHERE p.request_id='<request ID>' AND p.state='PAUSED';
+```
+
+Send that JSON object as `delivery` in an authenticated POST to the coordinator's `/internal/commands/workflow` with `action: "redrive"`. Use the locally configured internal credential, never paste it into source or logs. Re-drive increments the expected attempt once, adds one outbox delivery, grants three further retries and retains the same logical event and unresolved assignment. Repeating the old command cannot grant another budget. `action: "inspect"` returns a durable workflow decision; `action: "pause"` pauses the current due attempt. Arbitrary finalize/reject/unmatched commands are refused at the coordinator boundary.
+
+New requests must first enter through RabbitMQ. The reconciler scans already-started RUNNING workflows every two seconds and repeats their original attempt; it does not silently execute PAUSED workflows. A broker outage preserves pending outbox rows; a request-shard outage prevents acknowledgement rather than inventing a retry decision. Do not scale the coordinator beyond one instance.
