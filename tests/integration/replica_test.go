@@ -61,6 +61,73 @@ func TestOutboxClaimRequiresReplayBarrier(t *testing.T) {
 	}
 }
 
+func TestRetryAckRequiresReplayBarrier(t *testing.T) {
+	s, _, _, d := workflowFixture(t)
+	ctx := context.Background()
+	if _, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	standby, err := storage.Open(ctx, os.Getenv("ERM_TEST_STANDBY_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Close()
+	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_pause()"); err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Exec(context.Background(), "SELECT pg_wal_replay_resume()")
+	for range 2 {
+		limited, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		state, err := s.Workflow(limited, contracts.WorkflowCommand{Delivery: d, Action: "retry", Reason: "fixture"})
+		cancel()
+		if err == nil || state.Ack {
+			t.Fatalf("unconfirmed retry acknowledged %+v %v", state, err)
+		}
+	}
+	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_resume()"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "inspect"})
+	if err != nil || !state.Ack || state.ExpectedRetry != 1 {
+		t.Fatal(state, err)
+	}
+}
+
+func TestReplayBarrierBeforeCrossShardAdvance(t *testing.T) {
+	l := newWorkflowLab(t)
+	resource := l.resource(t, 2, "barrier-supply")
+	request, d := l.request(t, 0, "barrier-request")
+	if _, err := l.stores[0].BeginIntent(context.Background(), contracts.IntentCommand{AssignmentID: fmt.Sprintf("%032x", 0xabc99), RequestID: request.ID, ResourceID: resource.ID, Generation: 1}); err != nil {
+		t.Fatal(err)
+	}
+	standby, err := storage.Open(context.Background(), os.Getenv("ERM_TEST_STANDBY_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Close()
+	if _, err = standby.Exec(context.Background(), "SELECT pg_wal_replay_pause()"); err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Exec(context.Background(), "SELECT pg_wal_replay_resume()")
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	state, err := l.router.HandleDelivery(ctx, d)
+	cancel()
+	if err == nil || state.Ack {
+		t.Fatalf("unconfirmed workflow advanced %+v %v", state, err)
+	}
+	var count int
+	if err = l.pools[2].QueryRow(context.Background(), `SELECT count(*) FROM reservation_results`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("reserved before intent barrier %d %v", count, err)
+	}
+	if _, err = standby.Exec(context.Background(), "SELECT pg_wal_replay_resume()"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = l.router.HandleDelivery(context.Background(), d)
+	if err != nil || state.Request.Status != "ASSIGNED" {
+		t.Fatal(state, err)
+	}
+}
+
 func TestReservationAndIntentReplaysRequireBarrier(t *testing.T) {
 	store, _ := resourceFixture(t)
 	ctx := context.Background()

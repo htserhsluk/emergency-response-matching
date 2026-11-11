@@ -37,4 +37,4 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./... -count=1
       - run: go test -tags=broker ./internal/broker -count=1 -v
-      - run: go test -tags=integration,broker ./tests/integration/... -count=1 -v
+      - run: go test -race -tags=integration,broker ./tests/integration/... -count=1 -v

@@ -35,3 +35,23 @@ Scope: one primary/standby pair and request API foundation. This evidence does n
 The full assignment worker and final acceptance tests remain later milestones. No remote CI outcome is inferred from these local results.
 - Review recovery fix: `test-k8s-recovery.ps1 -Shard 0 -From b -TestInterruptedRejoin` passed. A real failed Job with a partial backup directory was replaced; rejoin preserved old data, restored streaming/synchronous mode and retained pre-outage/outage requests. Kubernetes shard0 now uses node-0a at route version3, node-0b standby.
 - `test-k8s-messaging.ps1` passed: new requests were located on each expected primary and standby; outbox rows became confirmed/sent; a request remained durable while RabbitMQ was stopped and published after restart; the diagnostic consumer retrieved a request and available candidates, left it PENDING, and requeued its delivery. Final queue observation: 10 ready, 0 unacknowledged; DLQ 0. These are pending diagnostic workloads, not completed matches.
+
+## Day 3 local verification (deployment proof recorded separately)
+
+- Build, vet and default race suite passed after the review fixes.
+- Real SQL tests passed for cross-shard assignment, two requests/one resource, duplicate/manual races, committed reservation with lost response, restart reconciliation, pause/redrive, stale generation and future-attempt rejection.
+- Replica suite passed including fresh retry-ack and cross-shard intent barriers with actual replay paused; no acknowledgement/reservation escaped an unconfirmed transaction. Controlled promotion continues to refuse stale replicas rather than forcibly promoting them before catch-up.
+- Real broker worker assigned across shards and confirmed unknown-schema DLQ publication. Shutdown left unfinished work available for redelivery. The deliberately stalled HTTP fixture initially hung during cleanup; a test-owned release channel fixed the fixture, and subsequent full normal and race-enabled broker suites passed.
+- Review tests reproduced timeout starvation and unsafe internal transitions, then passed after fixes. Three stalled intents now persist backoff while a later healthy intent completes within the ten-second reconciliation pass. Wrong-type/out-of-radius candidates, reservation without intent, and direct finalization/rejection/unmatched commands are refused.
+
+No final acceptance or production-readiness claim is made. Latest exact commands/results and deployed scaling evidence follow below when observed.
+
+### Day 3 deployed checks — 11 November 2026
+
+- Final real PostGIS/broker integration suite passed on Windows Go 1.27.3 using an isolated broker vhost. This includes explicit 5 km to 10 km expansion, wrong-type exclusion and exhausted-search UNMATCHED behavior.
+- A host/database clock difference reproduced premature retry refusal. Workflow due checks and retry scheduling now use the database clock; the full integration suite then passed.
+- Final images built and upgraded in place with schema5 and saved primary routes preserved. `scripts/test-k8s-matching.ps1` exited successfully: 18 unique assignments, matching scale 1 to 2, replacement worker UID, broker restart/reconnect, coordinator restart, and completion retaining resource allocation. Six storage pods, two matching workers, one API, one coordinator and one broker were healthy afterward.
+- An earlier deployed run passed all assignment assertions but failed its final display command because PowerShell split an unquoted resource list. The command was corrected and the complete script rerun successfully.
+- Windows vet passed. Restricted Windows unit checks could not access local sockets; those two tests passed when local access was enabled. Windows directory fsync is unsupported by the Linux control-file durability implementation; the full suite is verified on the Linux deployment platform instead.
+- Post-check runtime snapshot: Minikube container used 1.369 GiB of its 3 GiB limit; the two additional Compose test databases used about 76 MiB combined. This is a point-in-time container measurement, not a load benchmark. Kubernetes per-pod metrics were unavailable. All three primaries reported streaming synchronous standbys; all three standby role checks returned true.
+- Final `go test -race ./... -count=1` passed inside the pinned Linux Go 1.27.3 container after the clock fix. Remote CI additionally runs the real SQL/broker suite with the race detector.

@@ -4,7 +4,7 @@ A Go emergency-resource matching system, developed in verified increments.
 
 ## Current increment
 
-Day 2 provides request/resource APIs, three PostGIS shards with six independent primary/standby volumes, heartbeat-aware routing, guarded promotion/rejoin, durable reservation/intent primitives, and RabbitMQ outbox publication. The diagnostic matching consumer reads a request and nearby candidates, then requeues its delivery. Full assignment, reconciliation, bounded matching retries, worker scaling and browser features follow in later increments. This is not final product acceptance.
+Day 3 connects the complete asynchronous matching workflow: request outbox → RabbitMQ → Matching → coordinator → durable intent/reservation/finalization across three replicated PostGIS shards. It includes recovery of uncertain assignments, finite delayed retries, pause/re-drive and confirmed dead-letter handling. Browser/map/inbox extensions and final acceptance remain later milestones.
 
 ## Prerequisites
 
@@ -36,14 +36,14 @@ Use the controlled recovery commands in `docs/recovery.md`. Do not infer the pri
 Build the Compose application images, then the migration and diagnostic consumer images:
 
 ```powershell
-docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml build api coordinator node-0a
-docker build -f infra/Dockerfile.migrate -t erm-migrate:day2 .
-docker build -f infra/Dockerfile --build-arg SERVICE=matching -t erm-matching:day2 .
-minikube -p erm-lab image load erm-api:day2 erm-coordinator:day2 erm-storage-node:day2 erm-migrate:day2 erm-matching:day2
+docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml build api coordinator node-0a matching
+docker build -f infra/Dockerfile.migrate -t erm-migrate:day3 .
+docker build -f infra/Dockerfile --build-arg SERVICE=matching -t erm-matching:day3 .
+minikube -p erm-lab image load erm-api:day3 erm-coordinator:day3 erm-storage-node:day3 erm-migrate:day3 erm-matching:day3
 ./scripts/bootstrap-k8s.ps1 # new namespace/storage only
 ```
 
-For an existing initialized cluster, use `./scripts/upgrade-k8s.ps1`; bootstrap refuses an existing control PVC. Upgrade migrates the actual primaries and preserves promoted roles. A failed initial setup needs inspection before resuming, not a blind reapply. Namespace `erm` has six two-container storage pods, API/coordinator Deployments, Services, independent data PVCs, control/archive PVCs and a persistent RabbitMQ StatefulSet. The older `erm-smoke` namespace is only a Day 1 health demo.
+For an existing initialized cluster, use `./scripts/upgrade-k8s.ps1`; bootstrap refuses an existing control PVC. Upgrade migrates the actual primaries and preserves promoted roles. A failed initial setup needs inspection before resuming, not a blind reapply. Namespace `erm` has six two-container storage pods, API/coordinator/Matching Deployments, Services, independent data PVCs, control/archive PVCs and a persistent RabbitMQ StatefulSet. The older `erm-smoke` namespace is only a Day 1 health demo.
 
 Run one full deployment at a time on a small laptop. Stop the Compose broker before the Kubernetes broker demonstration. Do not remove volumes to free memory.
 
@@ -66,10 +66,10 @@ docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml exec 
 ./scripts/test-startup-order.ps1
 ./scripts/test-bootstrap-guard.ps1
 ./scripts/test-k8s-partial-availability.ps1
-./scripts/test-k8s-messaging.ps1
+./scripts/test-k8s-matching.ps1
 ```
 
-The last command demonstrates actual cluster data distribution, replica reads, confirmed publication, broker outage recovery and consumer lookup/requeue. It deliberately leaves valid pending requests; assignment is a later increment. Recovery demonstrations and their commands are in `docs/recovery.md`. Verification results are in `docs/test-results.md`; local checks do not imply remote CI passed.
+The last command tests actual asynchronous assignments, scaling Matching from one to two pods, worker replacement, broker reconnect, coordinator restart and completion protection. The older test-k8s-messaging.ps1 is a Day 2 diagnostic fixture and expects matching workers to be stopped. Recovery demonstrations and their commands are in `docs/recovery.md`. Verification results are in `docs/test-results.md`; local checks do not imply remote CI passed.
 
 ## API
 
@@ -86,3 +86,15 @@ Requests require a printable 16–128 character `Idempotency-Key` for mutations.
 All business storage calls go through the coordinator. Internal endpoints require the shared internal secret; typed `/internal/data/request:{id}` and `resource:{id}` support safe CRUD, with deletion refused for records retaining operation/assignment/delivery history. `/health/live` is process health; `/health/ready` checks complete routing/database dependencies. Kubernetes API serving readiness uses process health so healthy-shard operations remain reachable during a partial outage; it does not require broker availability (the outbox permits broker outages).
 
 Reference PDFs, the private handover, local credentials and execution checkpoints are excluded from Git and Docker build context.
+
+## Matching and retry behaviour
+
+Matching searches by resource type, first within 5 km and then 10 km, ordered by observed geographical distance and stable ID. Every required shard must answer. The coordinator validates the candidate using PostGIS before reservation and serializes request mutations with a fixed set of 256 cancellable locks.
+
+An intent is durable before reservation. Reservation atomically records success or definite rejection with resource allocation. Unknown outcomes retain the original assignment/resource IDs; reconciliation repeats the same attempt. Only a confirmed rejection permits another candidate. Finalization atomically records ASSIGNED and event completion. Public completion never releases the resource.
+
+Valid transient failures schedule at most three durable retries at 2, 5 and 15 seconds. Exhaustion records PAUSED and a diagnostic dead-letter delivery. Reconciliation respects the same pause and due time. Operator re-drive resumes the original intent with a recorded additional retry budget; see `docs/recovery.md`. Unscheduled future attempts and malformed/unknown-schema messages cannot change workflow state. Raw malformed messages are acknowledged only after a confirmed dead-letter publish.
+
+The API remains the single outbox publisher. Run exactly one coordinator; scale Matching, not the coordinator. Each worker owns its AMQP channel with prefetch 1 and manual acknowledgements. Reconnects back off, rebuild topology and leave uncertain work unacknowledged. Shutdown stops intake and bounds in-flight work to 20 seconds. `--inspect-one` remains a diagnostic option, not the normal worker mode.
+
+Operational limitations tracked for the next increment: worker readiness currently reflects process availability rather than an active consumer session; observed distance is persisted in assignment_attempts but not yet projected in public GET; worker/reconciler failures need additional bounded diagnostic logging. These do not replace the end-to-end processing checks. The system is a controlled local lab, not production HA.

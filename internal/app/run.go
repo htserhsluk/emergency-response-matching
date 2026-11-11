@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/coordinator"
 	"github.com/htserhsluk/emergency-response-matching/internal/delivery"
 	"github.com/htserhsluk/emergency-response-matching/internal/httpapp"
+	"github.com/htserhsluk/emergency-response-matching/internal/matching"
 	"github.com/htserhsluk/emergency-response-matching/internal/node"
 	"github.com/htserhsluk/emergency-response-matching/internal/storage"
 )
@@ -25,6 +27,8 @@ func Run(role string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	var background sync.WaitGroup
+	startBackground := func(run func()) { background.Add(1); go func() { defer background.Done(); run() }() }
 	secret := os.Getenv("ERM_INTERNAL_SECRET")
 	if len(secret) < 32 {
 		return fmt.Errorf("ERM_INTERNAL_SECRET must contain at least 32 characters")
@@ -84,17 +88,27 @@ func Run(role string) error {
 			router.NodeIDs[i] = os.Getenv(fmt.Sprintf("ERM_SHARD_%d_NODE", i))
 		}
 		store = router
+		startBackground(func() { router.RunReconciler(ctx) })
 		addr = ":8081"
-	case "api":
+	case "api", "matching":
 		url := os.Getenv("ERM_COORDINATOR_URL")
 		if url == "" {
 			return fmt.Errorf("ERM_COORDINATOR_URL required")
 		}
 		store = httpapp.NewClient(url, secret)
-		if address := os.Getenv("ERM_AMQP_URL"); address != "" {
-			go delivery.Run(ctx, store.(*httpapp.Client), broker.NewPublisher(address))
+		address := os.Getenv("ERM_AMQP_URL")
+		if role == "matching" {
+			if address == "" {
+				return fmt.Errorf("ERM_AMQP_URL required")
+			}
+			startBackground(func() { matching.Run(ctx, address, store.(*httpapp.Client)) })
+		} else if address != "" {
+			startBackground(func() { delivery.Run(ctx, store.(*httpapp.Client), broker.NewPublisher(address)) })
 		}
 		addr = ":8080"
+		if role == "matching" {
+			addr = ":8083"
+		}
 	default:
 		return fmt.Errorf("unsupported role %q", role)
 	}
@@ -124,5 +138,8 @@ func Run(role string) error {
 	}
 	drain, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return server.Shutdown(drain)
+	err := server.Shutdown(drain)
+	stop()
+	background.Wait()
+	return err
 }

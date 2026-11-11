@@ -21,3 +21,11 @@ Implemented: resource registration/status/list/spatial search across all three s
 Matching completion, cross-shard reconciliation, bounded business retries/dead-letter processing, worker scaling, browser/map/inbox and final acceptance remain later milestones. The diagnostic consumer does not allocate or acknowledge completion.
 
 Decisions: each publication owns a bounded connection/channel with library recovery disabled, preventing ambiguous return/confirm reuse at the cost of connection overhead. The diagnostic search uses 50 km solely to exercise candidate lookup; the actual Day 3 matching strategy remains the planned 5 km then 10 km. Controlled promotion permits explicit degraded writes only after the old primary is fenced; restoring synchronous redundancy is part of recovery.
+
+## Day 3 assignment and recovery
+
+Implemented: cross-shard type/distance matching (5 km then 10 km), coordinator request serialization, candidate validation, durable intent/reserve/finalize and confirmed rejection handling, bounded reconciliation, persistent event/retry/pause/re-drive state, real worker manual acknowledgements, confirmed malformed-message DLQ publication, reconnect backoff and bounded shutdown. Migration 00005 adds processed_events; applied migrations remain immutable.
+
+Review corrections: reserve a two-second assignment budget within the five-second operation so healthy request storage can record retry/backoff after a stalled dependency; prevent internal commands from forcing finalization/rejection/unmatched; validate type/distance before intent acceptance and reservation; require a fresh durable intent barrier for direct coordinator reservation commands.
+
+The older Day 1/2 sections describe historical boundaries. Remaining work is the final-topology failure matrix, browser/map/durable inbox, acceptance/load/clean-start evidence and study material. Deferred review polish: consumer-session readiness, public distance projection and bounded worker/reconciliation diagnostics.

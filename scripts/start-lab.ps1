@@ -1,6 +1,6 @@
 param([switch]$InitializeControl)
 . "$PSScriptRoot/lab-common.ps1"
-Compose build api coordinator node-0a
+Compose build api coordinator node-0a matching
 if ($InitializeControl) { Compose run --rm --no-deps --user 0 coordinator init-control /control/routes.json
     & docker run --rm -v erm-dev_coordinator-control:/control alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f chown -R 65532:65532 /control
     if ($LASTEXITCODE) {throw 'Control volume ownership failed'}
@@ -35,6 +35,6 @@ foreach ($i in 0..2) {
     & wsl -d Ubuntu --cd /mnt/c/Users/Kulshresth/Downloads/CCP/emergency-response-matching -- env PATH=/mnt/c/Users/Kulshresth/Downloads/CCP/.tools/go-linux/go/bin:/mnt/c/Users/Kulshresth/Downloads/CCP/.tools/bin:/usr/local/bin:/usr/bin:/bin bash scripts/migrate-local.sh $port
     if ($LASTEXITCODE) {throw "Migration failed on shard $i"}
 }
-Compose up -d node-0a node-0b node-1a node-1b node-2a node-2b coordinator broker api
+Compose up -d node-0a node-0b node-1a node-1b node-2a node-2b coordinator broker api matching
 Wait-Condition {try {(Invoke-WebRequest http://127.0.0.1:8080/health/ready -TimeoutSec 3).StatusCode -eq 200} catch {$false}} 'all shard routes ready'
 Write-Output 'Three synchronous pairs and request/resource services ready.'

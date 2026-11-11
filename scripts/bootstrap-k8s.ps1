@@ -29,5 +29,7 @@ Kube apply -f infra/k8s/broker.yaml
 Kube rollout status statefulset/broker --timeout=180s
 Kube rollout status deployment/coordinator --timeout=120s
 Kube rollout status deployment/api --timeout=120s
-Kube get pods,pvc
+Kube apply -f infra/k8s/matching.yaml
+Kube rollout status deployment/matching --timeout=120s
+Kube get 'pods,pvc'
 Write-Output 'Kubernetes: three synchronous storage pairs and API/coordinator ready.'

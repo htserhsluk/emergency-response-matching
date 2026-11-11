@@ -31,7 +31,7 @@ try {
     Kube-Wait { (Kube-Sql $primary "SELECT count(*) FROM outbox_events WHERE request_id='$($outage.id)' AND sent_at IS NOT NULL") -eq '1' } 'publication after broker recovery' 150
     $apiManifest=(Kube get deployment api -o json)|ConvertFrom-Json
     $job="inspect-$($tag.Substring(0,12))"
-    $manifest=@{apiVersion='batch/v1';kind='Job';metadata=@{name=$job;namespace='erm'};spec=@{backoffLimit=0;template=@{spec=@{restartPolicy='Never';containers=@(@{name='inspect';image='erm-matching:day2';imagePullPolicy='Never';args=@('--inspect-one');env=$apiManifest.spec.template.spec.containers[0].env})}}}}
+    $manifest=@{apiVersion='batch/v1';kind='Job';metadata=@{name=$job;namespace='erm'};spec=@{backoffLimit=0;template=@{spec=@{restartPolicy='Never';containers=@(@{name='inspect';image='erm-matching:day3';imagePullPolicy='Never';args=@('--inspect-one');env=$apiManifest.spec.template.spec.containers[0].env})}}}}
     $manifest|ConvertTo-Json -Depth 20|& kubectl --context erm-lab -n erm apply -f -
     if($LASTEXITCODE){throw 'Inspection Job creation failed'}
     Kube wait --for=condition=complete "job/$job" --timeout=60s

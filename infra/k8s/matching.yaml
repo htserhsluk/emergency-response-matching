@@ -1,0 +1,125 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "matching",
+        "namespace": "erm"
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "erm",
+            "service": "matching"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "erm",
+              "service": "matching"
+            }
+          },
+          "spec": {
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 65532,
+              "fsGroup": 65532
+            },
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "matching",
+                "image": "erm-matching:day3",
+                "imagePullPolicy": "Never",
+                "env": [
+                  {
+                    "name": "ERM_INTERNAL_SECRET",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_INTERNAL_SECRET"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ERM_COORDINATOR_URL",
+                    "value": "http://coordinator:8081"
+                  },
+                  {
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "erm-config",
+                        "key": "ERM_BROKER_PASSWORD"
+                      }
+                    },
+                    "name": "ERM_BROKER_PASSWORD"
+                  },
+                  {
+                    "value": "amqp://erm:$(ERM_BROKER_PASSWORD)@broker:5672/",
+                    "name": "ERM_AMQP_URL"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 8083
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "48Mi"
+                  },
+                  "limits": {
+                    "cpu": "500m",
+                    "memory": "192Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8083
+                  },
+                  "periodSeconds": 3
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8083
+                  },
+                  "periodSeconds": 10
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "metadata": {
+        "namespace": "erm",
+        "name": "matching"
+      },
+      "spec": {
+        "ports": [
+          {
+            "port": 8083
+          }
+        ],
+        "selector": {
+          "app": "erm",
+          "service": "matching"
+        }
+      },
+      "apiVersion": "v1",
+      "kind": "Service"
+    }
+  ]
+}

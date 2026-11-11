@@ -7,6 +7,11 @@ import (
 )
 
 func (r *Router) ScheduleMatch(ctx context.Context, id, key string) (contracts.Request, error) {
+	unlock, err := r.lockRequest(ctx, id)
+	if err != nil {
+		return contracts.Request{}, err
+	}
+	defer unlock()
 	n, err := r.node(id)
 	if err != nil {
 		return contracts.Request{}, err
@@ -14,8 +19,20 @@ func (r *Router) ScheduleMatch(ctx context.Context, id, key string) (contracts.R
 	return n.ScheduleMatch(ctx, id, key)
 }
 func (r *Router) BeginIntent(ctx context.Context, c contracts.IntentCommand) (contracts.Intent, error) {
+	unlock, err := r.lockRequest(ctx, c.RequestID)
+	if err != nil {
+		return contracts.Intent{}, err
+	}
+	defer unlock()
 	if c.Validate() != nil {
 		return contracts.Intent{}, contracts.ErrInvalid
+	}
+	request, err := r.Get(ctx, c.RequestID)
+	if err != nil {
+		return contracts.Intent{}, err
+	}
+	if err = r.validateCandidate(ctx, request, c); err != nil {
+		return contracts.Intent{}, err
 	}
 	n, err := r.node(c.RequestID)
 	if err != nil {
@@ -24,6 +41,29 @@ func (r *Router) BeginIntent(ctx context.Context, c contracts.IntentCommand) (co
 	return n.BeginIntent(ctx, c)
 }
 func (r *Router) Reserve(ctx context.Context, c contracts.ReserveCommand) (contracts.ReservationResult, error) {
+	unlock, err := r.lockRequest(ctx, c.RequestID)
+	if err != nil {
+		return contracts.ReservationResult{}, err
+	}
+	defer unlock()
+	n, err := r.node(c.RequestID)
+	if err != nil {
+		return contracts.ReservationResult{}, err
+	}
+	intent, err := n.IntentForReservation(ctx, c)
+	if err != nil {
+		return contracts.ReservationResult{}, err
+	}
+	request, err := n.Get(ctx, c.RequestID)
+	if err != nil {
+		return contracts.ReservationResult{}, err
+	}
+	if err = r.validateCandidate(ctx, request, intent.IntentCommand); err != nil {
+		return contracts.ReservationResult{}, err
+	}
+	return r.reserveResource(ctx, c)
+}
+func (r *Router) reserveResource(ctx context.Context, c contracts.ReserveCommand) (contracts.ReservationResult, error) {
 	if c.Validate() != nil {
 		return contracts.ReservationResult{}, contracts.ErrInvalid
 	}
