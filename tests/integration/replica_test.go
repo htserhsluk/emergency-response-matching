@@ -7,12 +7,60 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/htserhsluk/emergency-response-matching/internal/contracts"
 	"github.com/htserhsluk/emergency-response-matching/internal/storage"
 )
+
+func TestNotificationReplicaRecovery(t *testing.T) {
+	l := newWorkflowLab(t)
+	ctx := context.Background()
+	l.resource(t, 2, "replica-inbox-resource")
+	request, d := l.request(t, 0, "replica-inbox-request")
+	if _, err := l.router.HandleDelivery(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	page, err := l.router.ListNotifications(ctx, request.ID, contracts.ListQuery{Limit: 20})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatal(page, err)
+	}
+	standby, err := storage.Open(ctx, os.Getenv("ERM_TEST_STANDBY_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Close()
+	schema := strings.Split(l.pools[0].Config().ConnConfig.RuntimeParams["search_path"], ",")[0]
+	var count int
+	if err = standby.QueryRow(ctx, `SELECT count(*) FROM `+schema+`.notifications WHERE request_id=$1`, request.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("assignment notification not replicated %d %v", count, err)
+	}
+	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_pause()"); err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Exec(context.Background(), "SELECT pg_wal_replay_resume()")
+	for range 2 {
+		limited, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		_, err = l.router.ReadNotification(limited, request.ID, page.Items[0].ID, "replica-notification-read-key")
+		cancel()
+		if err == nil {
+			t.Fatal("unconfirmed read-state acknowledged")
+		}
+	}
+	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_resume()"); err != nil {
+		t.Fatal(err)
+	}
+	read, err := l.router.ReadNotification(ctx, request.ID, page.Items[0].ID, "replica-notification-read-key")
+	if err != nil || read.ReadAt == nil {
+		t.Fatal(read, err)
+	}
+	var isRead bool
+	if err = standby.QueryRow(ctx, `SELECT read_at IS NOT NULL FROM `+schema+`.notifications WHERE id=$1`, read.ID).Scan(&isRead); err != nil || !isRead {
+		t.Fatal("read state lost on replica", err)
+	}
+}
 
 func TestOutboxClaimRequiresReplayBarrier(t *testing.T) {
 	store, pool := resourceFixture(t)

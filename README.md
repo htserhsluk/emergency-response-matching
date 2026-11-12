@@ -4,7 +4,7 @@ A Go emergency-resource matching system, developed in verified increments.
 
 ## Current increment
 
-Day 3 connects the complete asynchronous matching workflow: request outbox → RabbitMQ → Matching → coordinator → durable intent/reservation/finalization across three replicated PostGIS shards. It includes recovery of uncertain assignments, finite delayed retries, pause/re-drive and confirmed dead-letter handling. Browser/map/inbox extensions and final acceptance remain later milestones.
+Day 4 adds an embedded browser workflow, a locally served Leaflet map, saved assignment distance/location and a durable shared demonstration inbox. The asynchronous matching, three replicated shards and bounded recovery remain authoritative. Final load, clean-start and release acceptance are the next milestone.
 
 ## Prerequisites
 
@@ -33,13 +33,13 @@ Use the controlled recovery commands in `docs/recovery.md`. Do not infer the pri
 
 ## Kubernetes
 
-Build the Compose application images, then the migration and diagnostic consumer images:
+Build the Compose application images and the migration image:
 
 ```powershell
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml build api coordinator node-0a matching
-docker build -f infra/Dockerfile.migrate -t erm-migrate:day3 .
-docker build -f infra/Dockerfile --build-arg SERVICE=matching -t erm-matching:day3 .
-minikube -p erm-lab image load erm-api:day3 erm-coordinator:day3 erm-storage-node:day3 erm-migrate:day3 erm-matching:day3
+docker build -f infra/Dockerfile.migrate -t erm-migrate:day4 .
+docker build -f infra/Dockerfile --build-arg SERVICE=matching -t erm-matching:day4 .
+minikube -p erm-lab image load erm-api:day4 erm-coordinator:day4 erm-storage-node:day4 erm-migrate:day4 erm-matching:day4
 ./scripts/bootstrap-k8s.ps1 # new namespace/storage only
 ```
 
@@ -97,4 +97,21 @@ Valid transient failures schedule at most three durable retries at 2, 5 and 15 s
 
 The API remains the single outbox publisher. Run exactly one coordinator; scale Matching, not the coordinator. Each worker owns its AMQP channel with prefetch 1 and manual acknowledgements. Reconnects back off, rebuild topology and leave uncertain work unacknowledged. Shutdown stops intake and bounds in-flight work to 20 seconds. `--inspect-one` remains a diagnostic option, not the normal worker mode.
 
-Operational limitations tracked for the next increment: worker readiness currently reflects process availability rather than an active consumer session; observed distance is persisted in assignment_attempts but not yet projected in public GET; worker/reconciler failures need additional bounded diagnostic logging. These do not replace the end-to-end processing checks. The system is a controlled local lab, not production HA.
+Worker readiness now requires an active consumer session; liveness remains process health. GET requests include saved assignment distance and resource coordinates when their shard is available. Worker/reconciliation failures produce bounded diagnostic messages without payloads or credentials. This is a controlled local lab, not production HA.
+
+## Browser and inbox
+
+Open `http://localhost:8080` for Compose. For Kubernetes, run `kubectl --context erm-lab -n erm port-forward service/api 18080:8080`, then open `http://localhost:18080`. The API serves the page and its versioned map library; no frontend build or extra service is required.
+
+Register assistance, submit a request, look up its ID, inspect the saved assignment and mark it completed. The resource directory allows AVAILABLE/UNAVAILABLE transitions while allocated resources remain protected. The inbox belongs to the selected request and the shared `demo` recipient; it is not a private user account. Its read state survives refresh and service/database recovery.
+
+Map background tiles are optional. Use `?tiles=off` for the tile-free coordinate/marker workflow. See [browser documentation](docs/browser.md) for configuration, attribution and fallback limits. See [inbox API](docs/inbox-api.md) for the two additional endpoints; the original seven APIs are unchanged.
+
+```powershell
+./scripts/test-k8s-public-api.ps1
+./scripts/test-k8s-failure-matrix.ps1
+./scripts/test-k8s-inbox-recovery.ps1
+./scripts/test-k8s-matching.ps1
+```
+
+Run failure scripts sequentially in the local demonstration cluster. They stop pods and temporarily allow single-copy writes where explicitly documented, then restore paired synchronous operation. Preserve volumes and inspect a failed recovery before retrying. The inbox migration is version6; existing finalized assignments receive one historical inbox entry at migration time.

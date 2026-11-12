@@ -8,6 +8,7 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/contracts"
 	"github.com/htserhsluk/emergency-response-matching/internal/httpapp"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"log/slog"
 	"math/rand/v2"
 	"net"
 	"time"
@@ -15,7 +16,18 @@ import (
 
 // ConsumeSession owns its connection/channel and never acknowledges uncertain
 // work. Returning closes the channel, allowing RabbitMQ to redeliver it.
-func ConsumeSession(ctx context.Context, address, queue string, client *httpapp.Client) error {
+func ConsumeSession(ctx context.Context, address, queue string, client *httpapp.Client, states ...*SessionState) error {
+	var state *SessionState
+	if len(states) > 0 {
+		state = states[0]
+	}
+	setReady := func(v bool) {
+		if state != nil {
+			state.connected.Store(v)
+		}
+	}
+	setReady(false)
+	defer setReady(false)
 	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var raw net.Conn
@@ -36,6 +48,7 @@ func ConsumeSession(ctx context.Context, address, queue string, client *httpapp.
 	if err != nil {
 		return contracts.ErrUnavailable
 	}
+	connectionClosed := conn.NotifyClose(make(chan *amqp.Error, 1))
 	raw.SetDeadline(time.Time{})
 	// A shutdown permits at most twenty seconds for an in-flight operation. An
 	// idle consumer returns immediately; blocked transport is bounded independently.
@@ -45,6 +58,8 @@ func ConsumeSession(ctx context.Context, address, queue string, client *httpapp.
 	if err != nil {
 		return contracts.ErrUnavailable
 	}
+	channelClosed := ch.NotifyClose(make(chan *amqp.Error, 1))
+	consumerCanceled := ch.NotifyCancel(make(chan string, 1))
 	raw.SetDeadline(time.Now().Add(5 * time.Second))
 	if err = broker.Declare(ch); err != nil {
 		return err
@@ -58,6 +73,20 @@ func ConsumeSession(ctx context.Context, address, queue string, client *httpapp.
 	}
 	raw.SetDeadline(time.Time{})
 	publisher := broker.NewPublisher(address)
+	setReady(ctx.Err() == nil)
+	monitorCtx, stopMonitor := context.WithCancel(ctx)
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		select {
+		case <-connectionClosed:
+		case <-channelClosed:
+		case <-consumerCanceled:
+		case <-monitorCtx.Done():
+		}
+		setReady(false)
+	}()
+	defer func() { stopMonitor(); <-monitorDone }()
 	for {
 		select {
 		case <-ctx.Done():
@@ -101,13 +130,16 @@ func ConsumeSession(ctx context.Context, address, queue string, client *httpapp.
 	}
 }
 
-func Run(ctx context.Context, address string, client *httpapp.Client) {
+func Run(ctx context.Context, address string, client *httpapp.Client, states ...*SessionState) {
 	delay := time.Second
 	for ctx.Err() == nil {
 		start := time.Now()
-		_ = ConsumeSession(ctx, address, "matching.work", client)
+		err := ConsumeSession(ctx, address, "matching.work", client, states...)
 		if ctx.Err() != nil {
 			return
+		}
+		if err != nil {
+			slog.Warn("matching session ended; reconnecting", "reason", "dependency_or_delivery_unconfirmed")
 		}
 		if time.Since(start) > 30*time.Second {
 			delay = time.Second

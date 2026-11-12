@@ -8,6 +8,7 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/contracts"
 	"github.com/htserhsluk/emergency-response-matching/internal/httpapp"
 	"github.com/htserhsluk/emergency-response-matching/internal/routing"
+	"log/slog"
 	"math"
 	"time"
 )
@@ -187,7 +188,9 @@ func (r *Router) RunReconciler(ctx context.Context) {
 			return
 		case <-timer.C:
 			step, cancel := context.WithTimeout(ctx, 10*time.Second)
-			_ = r.ReconcileOnce(step)
+			if err := r.ReconcileOnce(step); err != nil && ctx.Err() == nil {
+				slog.Warn("reconciliation pass incomplete", "reason", "dependency_or_workflow_unconfirmed")
+			}
 			cancel()
 		}
 	}

@@ -52,3 +52,9 @@ WHERE p.request_id='<request ID>' AND p.state='PAUSED';
 Send that JSON object as `delivery` in an authenticated POST to the coordinator's `/internal/commands/workflow` with `action: "redrive"`. Use the locally configured internal credential, never paste it into source or logs. Re-drive increments the expected attempt once, adds one outbox delivery, grants three further retries and retains the same logical event and unresolved assignment. Repeating the old command cannot grant another budget. `action: "inspect"` returns a durable workflow decision; `action: "pause"` pauses the current due attempt. Arbitrary finalize/reject/unmatched commands are refused at the coordinator boundary.
 
 New requests must first enter through RabbitMQ. The reconciler scans already-started RUNNING workflows every two seconds and repeats their original attempt; it does not silently execute PAUSED workflows. A broker outage preserves pending outbox rows; a request-shard outage prevents acknowledgement rather than inventing a retry decision. Do not scale the coordinator beyond one instance.
+
+## Recovery filesystem flushes
+
+The rebuild script flushes its own journal and changed directories after each phase. `pg_basebackup` flushes the incoming database before it returns. Avoid replacing these scoped flushes with a global `sync`: during local testing, global sync blocked indefinitely in the host FUSE filesystem even though database-volume flushes completed.
+
+If an old recovery Job is stuck terminating, keep its target fenced and preserve its PVC, archive and journal. Do not force-delete the pod and start another writer. Inspect the process and runtime first; a runtime restart may be necessary to clear an uninterruptible host-filesystem wait. Resume the same rejoin only after the old writer is gone, then verify synchronous replication before continuing failure tests.

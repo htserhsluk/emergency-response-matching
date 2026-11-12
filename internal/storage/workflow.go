@@ -177,6 +177,9 @@ func (s *Store) Workflow(ctx context.Context, c contracts.WorkflowCommand) (cont
 		out.Request.Status = status
 		out.Intent.Phase = phase
 		if c.Action == "finalize" {
+			if _, err = tx.Exec(ctx, `INSERT INTO notifications(id,request_id,assignment_id,resource_id,recipient) VALUES($1,$2,$1,$3,'demo') ON CONFLICT(assignment_id,recipient) DO NOTHING`, intent.AssignmentID, e.RequestID, intent.ResourceID); err != nil {
+				return out, err
+			}
 			out.Request.AssignedResourceID = intent.ResourceID
 			out.State = "DONE"
 			out.Ack = true

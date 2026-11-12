@@ -154,7 +154,17 @@ func scan(row pgx.Row) (contracts.Request, error) {
 	return r, err
 }
 func (s *Store) Get(ctx context.Context, id string) (contracts.Request, error) {
-	return scan(s.pool.QueryRow(ctx, selectRequest, id))
+	out, err := scan(s.pool.QueryRow(ctx, selectRequest, id))
+	if err != nil || out.AssignedResourceID == "" {
+		return out, err
+	}
+	var distance float64
+	err = s.pool.QueryRow(ctx, `SELECT distance_meters FROM assignment_attempts WHERE request_id=$1 AND generation=$2 AND phase='FINALIZED'`, id, out.Generation).Scan(&distance)
+	if err != nil {
+		return contracts.Request{}, err
+	}
+	out.Assignment = &contracts.AssignmentSummary{ResourceID: out.AssignedResourceID, DistanceMeters: distance}
+	return out, nil
 }
 func (s *Store) SetStatus(ctx context.Context, id, key, status string) (contracts.Request, error) {
 	var out contracts.Request

@@ -37,7 +37,7 @@
             "containers": [
               {
                 "name": "matching",
-                "image": "erm-matching:day3",
+                "image": "erm-matching:day4",
                 "imagePullPolicy": "Never",
                 "env": [
                   {
@@ -84,7 +84,7 @@
                 },
                 "readinessProbe": {
                   "httpGet": {
-                    "path": "/health/live",
+                    "path": "/health/ready",
                     "port": 8083
                   },
                   "periodSeconds": 3

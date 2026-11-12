@@ -1,7 +1,7 @@
 name: erm-dev
 services:
   api:
-    image: erm-api:day3
+    image: erm-api:day4
     build:
       context: ../..
       dockerfile: infra/Dockerfile
@@ -12,7 +12,7 @@ services:
       ERM_AMQP_URL: amqp://erm:${ERM_BROKER_PASSWORD}@broker:5672/
     ports: ["127.0.0.1:8080:8080"]
   coordinator:
-    image: erm-coordinator:day3
+    image: erm-coordinator:day4
     build:
       context: ../..
       dockerfile: infra/Dockerfile
@@ -29,7 +29,7 @@ services:
     ports: ["127.0.0.1:8081:8081"]
     volumes: [coordinator-control:/control]
   node-0a:
-    image: erm-storage-node:day3
+    image: erm-storage-node:day4
     build:
       context: ../..
       dockerfile: infra/Dockerfile
@@ -65,7 +65,7 @@ services:
       timeout: 2s
       retries: 30
   node-0b:
-    image: erm-storage-node:day3
+    image: erm-storage-node:day4
     environment:
       ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET}
       ERM_DATABASE_URL: postgres://erm:${ERM_DB_PASSWORD}@db-0b:5432/erm?sslmode=disable
@@ -97,7 +97,7 @@ services:
       timeout: 2s
       retries: 30
   node-1a:
-    image: erm-storage-node:day3
+    image: erm-storage-node:day4
     environment:
       ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET}
       ERM_DATABASE_URL: postgres://erm:${ERM_DB_PASSWORD}@db-1a:5432/erm?sslmode=disable
@@ -129,7 +129,7 @@ services:
       timeout: 2s
       retries: 30
   node-1b:
-    image: erm-storage-node:day3
+    image: erm-storage-node:day4
     environment:
       ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET}
       ERM_DATABASE_URL: postgres://erm:${ERM_DB_PASSWORD}@db-1b:5432/erm?sslmode=disable
@@ -161,7 +161,7 @@ services:
       timeout: 2s
       retries: 30
   node-2a:
-    image: erm-storage-node:day3
+    image: erm-storage-node:day4
     environment:
       ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET}
       ERM_DATABASE_URL: postgres://erm:${ERM_DB_PASSWORD}@db-2a:5432/erm?sslmode=disable
@@ -193,7 +193,7 @@ services:
       timeout: 2s
       retries: 30
   node-2b:
-    image: erm-storage-node:day3
+    image: erm-storage-node:day4
     environment:
       ERM_INTERNAL_SECRET: ${ERM_INTERNAL_SECRET}
       ERM_DATABASE_URL: postgres://erm:${ERM_DB_PASSWORD}@db-2b:5432/erm?sslmode=disable
@@ -225,7 +225,7 @@ services:
       timeout: 2s
       retries: 30
   matching:
-    image: erm-matching:day3
+    image: erm-matching:day4
     build:
       context: ../..
       dockerfile: infra/Dockerfile

@@ -73,7 +73,7 @@
             "containers": [
               {
                 "name": "coordinator",
-                "image": "erm-coordinator:day3",
+                "image": "erm-coordinator:day4",
                 "imagePullPolicy": "Never",
                 "env": [
                   {
@@ -218,7 +218,7 @@
             "containers": [
               {
                 "name": "api",
-                "image": "erm-api:day3",
+                "image": "erm-api:day4",
                 "imagePullPolicy": "Never",
                 "env": [
                   {

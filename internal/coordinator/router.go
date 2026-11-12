@@ -6,6 +6,7 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/httpapp"
 	"github.com/htserhsluk/emergency-response-matching/internal/routing"
 	"sync"
+	"time"
 )
 
 type Router struct {
@@ -63,7 +64,17 @@ func (r *Router) Get(ctx context.Context, id string) (contracts.Request, error) 
 	if err != nil {
 		return contracts.Request{}, err
 	}
-	return n.Get(ctx, id)
+	out, err := n.Get(ctx, id)
+	if err == nil && out.Assignment != nil {
+		// Resource coordinates are immutable. A resource-shard outage must not
+		// hide the request's durable status; absent coordinates stay explicit.
+		locationCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		defer cancel()
+		if resource, e := r.GetResource(locationCtx, out.Assignment.ResourceID); e == nil {
+			out.Assignment.Location = resource.Location
+		}
+	}
+	return out, err
 }
 func (r *Router) SetStatus(ctx context.Context, id, key, status string) (contracts.Request, error) {
 	unlock, err := r.lockRequest(ctx, id)

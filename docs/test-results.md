@@ -55,3 +55,22 @@ No final acceptance or production-readiness claim is made. Latest exact commands
 - Windows vet passed. Restricted Windows unit checks could not access local sockets; those two tests passed when local access was enabled. Windows directory fsync is unsupported by the Linux control-file durability implementation; the full suite is verified on the Linux deployment platform instead.
 - Post-check runtime snapshot: Minikube container used 1.369 GiB of its 3 GiB limit; the two additional Compose test databases used about 76 MiB combined. This is a point-in-time container measurement, not a load benchmark. Kubernetes per-pod metrics were unavailable. All three primaries reported streaming synchronous standbys; all three standby role checks returned true.
 - Final `go test -race ./... -count=1` passed inside the pinned Linux Go 1.27.3 container after the clock fix. Remote CI additionally runs the real SQL/broker suite with the race detector.
+
+## Day 4 verification — 12 November 2026
+
+- All three shard pairs passed real Kubernetes promotion/rejoin, including interrupted rebuild and coordinator restart.
+- The approved local failure matrix passed: standby loss refuses unconfirmed writes; explicit degraded writes catch up after standby return; loss of both copies returns bounded errors while another shard remains readable; a fenced, lagging standby is refused promotion until catch-up. No stale replica was forcibly promoted.
+- All seven required public API operations passed through the deployed Service, including wrong-type/distant exclusion, unmatched/manual matching, pagination, completion, and invalid/missing inputs.
+- Real SQL/broker integration passed after review fixes for bounded resource-location enrichment and consumer readiness during in-flight broker loss. The replica suite passed notification read/replay durability barriers.
+- Browser checks passed real registration, assignment and completion; map coordinate selection; saved assignment distance/location; persisted inbox read state after reload; and a real assignment at negative coordinates with external tiles disabled.
+- Repeated lookup initially created duplicate polling timers. The browser regression failed before the generation-token fix and passed afterward.
+- A deployed inbox failover check reached promotion but its old rebuild script hung in global `sync`. The scoped-flush fix passed a disposable regression that rejects global flushes and checks preserved old data. After a Windows/runtime restart, the corrected rebuild restored synchronous replication. The full deployed inbox test then passed API restart, promotion, rebuild and duplicate-match checks.
+
+### Final Day 4 deployment
+
+- Go build and vet, Node polling regression, and Linux `go test -race ./... -count=1` passed on the final source. All service images were rebuilt, loaded and rolled out with schema 6, preserving saved routes.
+- `scripts/test-k8s-inbox-recovery.ps1` passed: one notification and preserved read timestamp after API restart, promotion to node-0a (route version 7), and rebuild of node-0b. Browser lookup after recovery confirmed the saved read state.
+- `scripts/test-k8s-matching.ps1` passed: 18 distinct resource allocations, one-to-two worker scaling, replacement worker UID, broker restart/reconnect, coordinator restart and completion protection.
+- `scripts/test-k8s-public-api.ps1` passed all seven API paths. Its final cross-shard fixture and browser comparison are recorded in `tests/acceptance/browser-checklist.md`.
+- Point-in-time memory with two workers: Docker erm-lab 1.755 GiB / 3 GiB; kubelet node working set 1798.9 MiB. Pod working sets: workers 5.2/7.2 MiB, API 10.5 MiB, coordinator 8.0 MiB, broker 110.9 MiB, six storage pods 26.2–56.0 MiB. These are snapshot observations, not peak/load measurements or a capacity guarantee. Day 5 measures the workload separately.
+- Independent review findings were reproduced and fixed: slow resource-location enrichment must not hide request status; broker loss must clear readiness even during in-flight work; repeated browser lookup must not multiply polling loops. No remaining finding from that review is deferred.

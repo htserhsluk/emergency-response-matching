@@ -19,6 +19,7 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/matching"
 	"github.com/htserhsluk/emergency-response-matching/internal/node"
 	"github.com/htserhsluk/emergency-response-matching/internal/storage"
+	"github.com/htserhsluk/emergency-response-matching/internal/web"
 )
 
 func Run(role string) error {
@@ -38,6 +39,7 @@ func Run(role string) error {
 	var registry *coordinator.Registry
 	var control *coordinator.Control
 	var gate *node.Gate
+	workerState := &matching.SessionState{}
 	switch role {
 	case "storage-node":
 		pool, err := storage.Open(ctx, os.Getenv("ERM_DATABASE_URL"))
@@ -101,7 +103,7 @@ func Run(role string) error {
 			if address == "" {
 				return fmt.Errorf("ERM_AMQP_URL required")
 			}
-			startBackground(func() { matching.Run(ctx, address, store.(*httpapp.Client)) })
+			startBackground(func() { matching.Run(ctx, address, store.(*httpapp.Client), workerState) })
 		} else if address != "" {
 			startBackground(func() { delivery.Run(ctx, store.(*httpapp.Client), broker.NewPublisher(address)) })
 		}
@@ -116,6 +118,12 @@ func Run(role string) error {
 		addr = configured
 	}
 	handler := httpapp.NewServer(store, secret, role != "api")
+	if role == "matching" {
+		handler = workerState.Handler(handler)
+	}
+	if role == "api" {
+		handler = web.Handler(handler)
+	}
 	if gate != nil {
 		handler = gate.Handler(handler)
 	}
