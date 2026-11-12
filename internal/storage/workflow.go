@@ -139,7 +139,9 @@ func (s *Store) Workflow(ctx context.Context, c contracts.WorkflowCommand) (cont
 	if c.Action == "redrive" {
 		return finish()
 	}
-	if out.DueAt.After(databaseNow) {
+	// Operator pause must work while a retry is waiting. Only execution waits
+	// for its due time; pausing still commits through the same replay barrier.
+	if c.Action != "pause" && out.DueAt.After(databaseNow) {
 		return out, contracts.ErrUnavailable
 	}
 	var intent contracts.Intent

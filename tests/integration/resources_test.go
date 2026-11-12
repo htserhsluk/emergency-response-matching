@@ -41,6 +41,7 @@ func resourceFixture(t *testing.T) (*storage.Store, *pgxpool.Pool) {
 	}
 	q := u.Query()
 	q.Set("search_path", schema+",public")
+	q.Set("application_name", schema)
 	u.RawQuery = q.Encode()
 	pool, err := storage.Open(ctx, u.String())
 	if err != nil {
