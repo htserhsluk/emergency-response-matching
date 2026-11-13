@@ -23,7 +23,7 @@ try{
         Kube wait --for=condition=complete "job/migrate-v$version-$node" --timeout=120s
     }
     foreach($i in 0..2){foreach($side in @('a','b')){
-        Kube set image "statefulset/node-$i$side" agent=erm-storage-node:day3
+        Kube set image "statefulset/node-$i$side" agent=erm-storage-node:day4
         Kube rollout restart "statefulset/node-$i$side"
         Kube rollout status "statefulset/node-$i$side" --timeout=120s
     }}

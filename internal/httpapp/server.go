@@ -89,6 +89,10 @@ func NewServer(store Requests, secret string, internal bool) http.Handler {
 			path = strings.TrimPrefix(path, "/internal")
 		}
 		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) >= 3 && parts[0] == "requests" && parts[2] == "notifications" {
+			serveNotifications(w, r, store, parts)
+			return
+		}
 		if len(parts) > 0 && (parts[0] == "match" || (internal && parts[0] == "commands")) {
 			serveCommands(w, r, store, parts, internal)
 			return

@@ -73,14 +73,21 @@ func PayloadHash(v any) string {
 }
 
 type Request struct {
-	ID                 string    `json:"id"`
-	Type               string    `json:"type"`
-	Location           *Location `json:"location"`
-	Details            string    `json:"details"`
-	Status             string    `json:"status"`
-	CreatedAt          time.Time `json:"createdAt"`
-	Generation         int64     `json:"generation"`
-	AssignedResourceID string    `json:"assignedResourceId,omitempty"`
+	ID                 string             `json:"id"`
+	Type               string             `json:"type"`
+	Location           *Location          `json:"location"`
+	Details            string             `json:"details"`
+	Status             string             `json:"status"`
+	CreatedAt          time.Time          `json:"createdAt"`
+	Generation         int64              `json:"generation"`
+	AssignedResourceID string             `json:"assignedResourceId,omitempty"`
+	Assignment         *AssignmentSummary `json:"assignment,omitempty"`
+}
+
+type AssignmentSummary struct {
+	ResourceID     string    `json:"resourceId"`
+	DistanceMeters float64   `json:"distanceMeters"`
+	Location       *Location `json:"location,omitempty"`
 }
 
 type StatusCommand struct {

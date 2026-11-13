@@ -22,3 +22,11 @@ Host measurement: approximately 16 GB RAM, 16 logical processors. Bootstrap Kube
 RabbitMQ 4.4.0-management (immutable digest in Compose/Kubernetes/CI), amqp091-go v1.16.0. Publication owns the connection and raw transport deadline; experimental library recovery is disabled. The real broker tests exercise routed confirmations and repeated unroutable returns.
 
 The six-node Kubernetes storage topology and recovery have now run on this host. This is functional evidence, not a throughput benchmark. Full matching-worker scaling and final memory/load measurements remain pending.
+
+## Day 4 browser assets
+
+Leaflet1.9.4 stable is vendored from the version-pinned npm distribution with its license. No npm runtime dependency is needed.
+- leaflet.js SHA256: db49d009c841f5ca34a888c96511ae936fd9f5533e90d8b2c4d57596f4e5641a
+- leaflet.css SHA256: a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6
+
+Current manifests use day4 application/migration tags. Schema version6 adds durable notifications. Earlier Day2/Day3 resource statements above are historical; two-worker deployment was demonstrated in Day3, with Day4 regression evidence recorded separately.

@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/htserhsluk/emergency-response-matching/internal/contracts"
 	"github.com/htserhsluk/emergency-response-matching/internal/coordinator"
@@ -280,8 +281,12 @@ func TestPausedWorkflowStopsReconciliationAndRedriveResumesOriginalIntent(t *tes
 	}
 	d.RetryNumber = 1
 	d.DeliveryID = contracts.DeliveryID(d.Event.EventID, 1, "request.match")
-	if _, err := l.pools[0].Exec(context.Background(), `UPDATE processed_events SET due_at=clock_timestamp()-interval '1 second'`); err != nil {
+	if _, err := l.pools[0].Exec(context.Background(), `UPDATE processed_events SET due_at=clock_timestamp()+interval '1 hour'`); err != nil {
 		t.Fatal(err)
+	}
+	// A pending retry cannot execute early, but an operator can pause it now.
+	if _, err := l.router.HandleDelivery(context.Background(), d); !errors.Is(err, contracts.ErrUnavailable) {
+		t.Fatalf("future retry executed: %v", err)
 	}
 	state, err := l.router.Workflow(context.Background(), contracts.WorkflowCommand{Delivery: d, Action: "pause", Reason: "operator fixture"})
 	if err != nil || state.State != "PAUSED" {

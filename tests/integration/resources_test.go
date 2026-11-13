@@ -41,13 +41,14 @@ func resourceFixture(t *testing.T) (*storage.Store, *pgxpool.Pool) {
 	}
 	q := u.Query()
 	q.Set("search_path", schema+",public")
+	q.Set("application_name", schema)
 	u.RawQuery = q.Encode()
 	pool, err := storage.Open(ctx, u.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, file := range []string{"00001_core.sql", "00002_resources.sql", "00003_assignment.sql", "00004_delivery.sql", "00005_workflow.sql"} {
+	for _, file := range []string{"00001_core.sql", "00002_resources.sql", "00003_assignment.sql", "00004_delivery.sql", "00005_workflow.sql", "00006_notifications.sql"} {
 		b, err := os.ReadFile("../../migrations/" + file)
 		if err != nil {
 			t.Fatal(err)

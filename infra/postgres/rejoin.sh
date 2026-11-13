@@ -16,7 +16,10 @@ if [ ! -f "$state" ]; then
  gosu postgres pg_basebackup -d "host=db-$PRIMARY_ID user=replicator application_name=node-$TARGET_ID" -D "$incoming" -R -X stream
  test -s "$incoming/PG_VERSION" && test -f "$incoming/standby.signal" || exit 1
  printf '%s %s %s ARCHIVE\n' "$PRIMARY_ID" "$EXPECTED_SYSTEM_ID" "$(date +%s%N)" > "$state.tmp"
- sync; mv "$state.tmp" "$state"; sync
+ # pg_basebackup fsyncs its files. Flush only our changed directory entries
+ # and journal; a global sync can hang on unrelated host-mounted filesystems.
+ sync "$state.tmp" "$target" "/archive/$TARGET_ID"
+ mv "$state.tmp" "$state"; sync "/archive/$TARGET_ID"
 fi
 read -r source system stamp phase < "$state"
 test "$source" = "$PRIMARY_ID" && test "$system" = "$EXPECTED_SYSTEM_ID" || { echo 'Recovery journal source differs'; exit 1; }
@@ -29,11 +32,13 @@ if [ "$phase" = ARCHIVE ]; then
   mv -- "$entry" "$backup/"
  done
  printf '%s %s %s INSTALL\n' "$source" "$system" "$stamp" > "$state.tmp"
- sync; mv "$state.tmp" "$state"; sync
+ sync "$target" "$backup" "$state.tmp"
+ mv "$state.tmp" "$state"; sync "/archive/$TARGET_ID"
 fi
 for entry in "$incoming"/*; do mv -- "$entry" "$target/"; done
 test -s "$target/PG_VERSION" && test -f "$target/standby.signal" || exit 1
 if [ -d "$incoming" ]; then rmdir "$incoming"; fi
 chown postgres:postgres "$target";chmod 700 "$target"
-sync; rm -- "$state"; sync
+sync "$target" "$backup"
+rm -- "$state"; sync "/archive/$TARGET_ID"
 echo 'Rebuilt standby; previous database files preserved.'

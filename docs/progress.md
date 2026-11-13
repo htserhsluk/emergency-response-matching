@@ -29,3 +29,9 @@ Implemented: cross-shard type/distance matching (5 km then 10 km), coordinator r
 Review corrections: reserve a two-second assignment budget within the five-second operation so healthy request storage can record retry/backoff after a stalled dependency; prevent internal commands from forcing finalization/rejection/unmatched; validate type/distance before intent acceptance and reservation; require a fresh durable intent barrier for direct coordinator reservation commands.
 
 The older Day 1/2 sections describe historical boundaries. Remaining work is the final-topology failure matrix, browser/map/durable inbox, acceptance/load/clean-start evidence and study material. Deferred review polish: consumer-session readiness, public distance projection and bounded worker/reconciliation diagnostics.
+
+## Day 4 browser and durable inbox
+
+Implemented: embedded browser forms and status/resource views; Leaflet coordinate selection and saved assignment map/distance with a text fallback; transactional assignment notifications, request-scoped list/read endpoints and persisted read state. Migration 00006 backfills historical finalized assignments. Worker readiness now tracks the owned consumer session, and worker/reconciliation failures emit bounded diagnostics.
+
+The final-topology failure matrix, public/browser workflows, inbox promotion/rebuild and worker scaling/recovery checks passed on the final local deployment. A host FUSE flush stalled the old rebuild script; scoped journal/directory flushes passed the regression and real rebuild after runtime recovery. All three pairs are synchronous. Day 5 retains full acceptance, measured load, clean-start and release evidence; this milestone is not the final release.

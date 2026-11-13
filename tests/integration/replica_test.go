@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,11 +15,62 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/storage"
 )
 
+func TestNotificationReplicaRecovery(t *testing.T) {
+	l := newWorkflowLab(t)
+	ctx := context.Background()
+	l.resource(t, 2, "replica-inbox-resource")
+	request, d := l.request(t, 0, "replica-inbox-request")
+	if _, err := l.router.HandleDelivery(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	page, err := l.router.ListNotifications(ctx, request.ID, contracts.ListQuery{Limit: 20})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatal(page, err)
+	}
+	standby, err := storage.Open(ctx, os.Getenv("ERM_TEST_STANDBY_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Close()
+	schema := strings.Split(l.pools[0].Config().ConnConfig.RuntimeParams["search_path"], ",")[0]
+	var count int
+	if err = standby.QueryRow(ctx, `SELECT count(*) FROM `+schema+`.notifications WHERE request_id=$1`, request.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("assignment notification not replicated %d %v", count, err)
+	}
+	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_pause()"); err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Exec(context.Background(), "SELECT pg_wal_replay_resume()")
+	for range 2 {
+		limited, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		_, err = l.router.ReadNotification(limited, request.ID, page.Items[0].ID, "replica-notification-read-key")
+		cancel()
+		if err == nil {
+			t.Fatal("unconfirmed read-state acknowledged")
+		}
+	}
+	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_resume()"); err != nil {
+		t.Fatal(err)
+	}
+	read, err := l.router.ReadNotification(ctx, request.ID, page.Items[0].ID, "replica-notification-read-key")
+	if err != nil || read.ReadAt == nil {
+		t.Fatal(read, err)
+	}
+	var isRead bool
+	if err = standby.QueryRow(ctx, `SELECT read_at IS NOT NULL FROM `+schema+`.notifications WHERE id=$1`, read.ID).Scan(&isRead); err != nil || !isRead {
+		t.Fatal("read state lost on replica", err)
+	}
+}
+
 func TestOutboxClaimRequiresReplayBarrier(t *testing.T) {
 	store, pool := resourceFixture(t)
 	ctx := context.Background()
 	request, err := store.Create(ctx, "outbox-barrier-request-0001", body())
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Make this a durability test, independent of scheduling or clock correction.
+	if _, err = pool.Exec(ctx, `UPDATE outbox_events SET due_at='2000-01-01 UTC'`); err != nil {
 		t.Fatal(err)
 	}
 	standby, err := storage.Open(ctx, os.Getenv("ERM_TEST_STANDBY_URL"))
@@ -32,11 +84,53 @@ func TestOutboxClaimRequiresReplayBarrier(t *testing.T) {
 	defer standby.Exec(context.Background(), "SELECT pg_wal_replay_resume()")
 	attempt := func(token string) {
 		t.Helper()
-		limited, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		limited, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		rows, err := store.ClaimOutbox(limited, token)
-		if err == nil || len(rows) != 0 {
-			t.Fatalf("unconfirmed claim escaped: %+v %v", rows, err)
+		type result struct {
+			rows []contracts.Delivery
+			err  error
+		}
+		done := make(chan result, 1)
+		go func() { rows, err := store.ClaimOutbox(limited, token); done <- result{rows, err} }()
+		// Cancel only after this fixture's backend is actually waiting for
+		// synchronous replay, not after an arbitrary 200 ms startup allowance.
+		for {
+			select {
+			case got := <-done:
+				t.Fatalf("claim returned before replay wait: %+v %v", got.rows, got.err)
+			default:
+			}
+			var waiting bool
+			if err := pool.QueryRow(limited, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event='SyncRep')`, pool.Config().ConnConfig.RuntimeParams["application_name"]).Scan(&waiting); err != nil {
+				t.Fatal("claim never reached synchronous replay wait", err)
+			}
+			if waiting {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+		select {
+		case got := <-done:
+			if got.err == nil || len(got.rows) != 0 {
+				t.Fatalf("unconfirmed claim escaped: %+v %v", got.rows, got.err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("canceled claim did not return")
+		}
+		// Client cancellation can return before PostgreSQL finishes leaving
+		// SyncRep. Observe the locally committed row before testing its replay.
+		settled, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		for {
+			var visible bool
+			if err := pool.QueryRow(settled, `SELECT EXISTS(SELECT 1 FROM outbox_events WHERE claim_token=$1)`, token).Scan(&visible); err != nil {
+				t.Fatal("canceled claim did not settle locally", err)
+			}
+			if visible {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	attempt("paused-claim-token-00001")
@@ -45,14 +139,14 @@ func TestOutboxClaimRequiresReplayBarrier(t *testing.T) {
 		t.Fatalf("ambiguous claim not locally visible %d %v", visible, err)
 	}
 	// Advance only the lease fixture without claiming synchronous durability.
-	if _, err = pool.Exec(ctx, "BEGIN; SET LOCAL synchronous_commit=local; UPDATE outbox_events SET claim_until=clock_timestamp()-interval '1 second'; COMMIT"); err != nil {
+	if _, err = pool.Exec(ctx, "BEGIN; SET LOCAL synchronous_commit=local; UPDATE outbox_events SET claim_until='2000-01-01 UTC'; COMMIT"); err != nil {
 		t.Fatal(err)
 	}
 	attempt("paused-claim-token-00002")
 	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_resume()"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = pool.Exec(ctx, "UPDATE outbox_events SET claim_until=clock_timestamp()-interval '1 second'"); err != nil {
+	if _, err = pool.Exec(ctx, "UPDATE outbox_events SET claim_until='2000-01-01 UTC'"); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := store.ClaimOutbox(ctx, "confirmed-claim-token-0003")
