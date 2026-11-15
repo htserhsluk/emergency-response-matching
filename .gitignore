@@ -12,3 +12,5 @@ bin/
 coverage.out
 *.log
 .worktrees/
+__pycache__/
+TRANSFER_CONTEXT.md

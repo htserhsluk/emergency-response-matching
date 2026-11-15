@@ -88,10 +88,10 @@ func TestAssignmentTimeoutPersistsBackoffWithoutStarvingReconciliation(t *testin
 	}
 	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_ = l.router.ReconcileOnce(bounded)
+	reconcileErr := l.router.ReconcileOnce(bounded)
 	got, err := l.router.Get(ctx, request.ID)
 	if err != nil || got.Status != "ASSIGNED" {
-		t.Fatalf("healthy work starved %+v %v", got, err)
+		t.Fatalf("healthy work starved %+v read=%v reconcile=%v deadline=%v", got, err, reconcileErr, bounded.Err())
 	}
 	var retried int
 	if err = l.pools[0].QueryRow(ctx, `SELECT count(*) FROM processed_events WHERE expected_retry=1`).Scan(&retried); err != nil || retried != 3 {
