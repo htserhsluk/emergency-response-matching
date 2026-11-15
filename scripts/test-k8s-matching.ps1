@@ -24,6 +24,12 @@ try {
     $workersStopped=$true
     Kube wait --for=delete pod -l service=matching --timeout=90s
     Add-Requests 3 'single'
+    Kube-Wait {
+        $queues=(Kube exec broker-0 '--' rabbitmqctl -q list_queues name messages_ready --formatter json)|ConvertFrom-Json
+        $work=$queues|Where-Object name -eq 'matching.work'
+        $work.messages_ready -ge 3
+    } 'three actual RabbitMQ messages queued while workers stopped'
+    Write-Output 'PASS: RabbitMQ matching.work has at least three ready messages with zero workers.'
     foreach($r in $requests){$got=Invoke-RestMethod "http://127.0.0.1:18080/requests/$($r.id)";if($got.status -ne 'PENDING'){throw 'New work completed without its initial broker consumer'}}
     Kube scale deployment/matching --replicas=1
     $workersStopped=$false
@@ -63,6 +69,12 @@ try {
     if($complete.status -ne 'COMPLETED'){throw 'Completion failed'}
     $resource=Kube-Internal "data/resource:$($complete.assignedResourceId)"
     if($resource.availability -or $resource.status -ne 'ALLOCATED'){throw 'Completion incorrectly released resource'}
+    Kube-Wait {
+        $queues=(Kube exec broker-0 '--' rabbitmqctl -q list_queues name messages_ready messages_unacknowledged --formatter json)|ConvertFrom-Json
+        $work=$queues|Where-Object name -eq 'matching.work'
+        $null -ne $work -and $work.messages_ready -eq 0 -and $work.messages_unacknowledged -eq 0
+    } 'work queue drained and acknowledgements complete'
+    Write-Output 'PASS: matching.work ready=0 and unacknowledged=0 after recovery.'
     Kube get 'deployments,pods'
     Write-Output "PASS: $($requests.Count) unique assignments, one-to-two worker scaling, worker replacement, broker reconnect, coordinator restart and completion protection."
 }finally{
