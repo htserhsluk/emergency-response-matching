@@ -58,3 +58,7 @@ New requests must first enter through RabbitMQ. The reconciler scans already-sta
 The rebuild script flushes its own journal and changed directories after each phase. `pg_basebackup` flushes the incoming database before it returns. Avoid replacing these scoped flushes with a global `sync`: during local testing, global sync blocked indefinitely in the host FUSE filesystem even though database-volume flushes completed.
 
 If an old recovery Job is stuck terminating, keep its target fenced and preserve its PVC, archive and journal. Do not force-delete the pod and start another writer. Inspect the process and runtime first; a runtime restart may be necessary to clear an uninterruptible host-filesystem wait. Resume the same rejoin only after the old writer is gone, then verify synchronous replication before continuing failure tests.
+
+## Recovery journal identity
+
+Kubernetes failover journals now live beneath `.local/recovery/system-<PostgreSQL-system-identifier>/`. Different fresh installations cannot reuse a journal merely because shard, member and route version match. A legacy journal at the old path remains eligible only when its saved database identifier matches the candidate. Identity is validated before fencing. Keep these local files across interrupted recovery; do not delete or copy them between databases to bypass a refusal.

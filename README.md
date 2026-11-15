@@ -4,7 +4,7 @@ A Go emergency-resource matching system, developed in verified increments.
 
 ## Current increment
 
-Day 4 adds an embedded browser workflow, a locally served Leaflet map, saved assignment distance/location and a durable shared demonstration inbox. The asynchronous matching, three replicated shards and bounded recovery remain authoritative. Final load, clean-start and release acceptance are the next milestone.
+The system includes asynchronous matching, three replicated shards, controlled recovery, an embedded Leaflet browser and a durable shared demonstration inbox. Final acceptance is tracked in [release evidence](docs/evidence-index.md), with [requirements](docs/requirements.md), [architecture](docs/architecture.md), [API](docs/api.md) and the [operator/demo runbook](docs/runbook.md). Pending checks and observed failures are explicitly distinguished from passing results.
 
 ## Prerequisites
 
