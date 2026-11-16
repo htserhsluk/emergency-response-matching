@@ -30,3 +30,7 @@ Leaflet1.9.4 stable is vendored from the version-pinned npm distribution with it
 - leaflet.css SHA256: a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6
 
 Current manifests use day4 application/migration tags. Schema version6 adds durable notifications. Earlier Day2/Day3 resource statements above are historical; two-worker deployment was demonstrated in Day3, with Day4 regression evidence recorded separately.
+
+## Final acceptance environment
+
+The15–16 November rehearsal used Docker Engine29.9.1, the same pinned application/database/broker artifacts, Minikube1.39.0/Kubernetes1.36.1 and schema6. Python3 standard library runs the optional workload harness; it is not an application runtime dependency. The original `erm-lab` and independent fresh `erm-release` profile each allocate two CPUs/3GiB and were run one at a time. See [release evidence](evidence-index.md) for measured workload, exact local image IDs, independent recovery timings and observed limitations.

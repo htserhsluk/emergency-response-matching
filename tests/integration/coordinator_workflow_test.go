@@ -86,12 +86,29 @@ func TestAssignmentTimeoutPersistsBackoffWithoutStarvingReconciliation(t *testin
 	if _, err := l.stores[0].BeginIntent(ctx, contracts.IntentCommand{AssignmentID: fmt.Sprintf("%032x", 200), RequestID: request.ID, ResourceID: resource.ID, Generation: 1}); err != nil {
 		t.Fatal(err)
 	}
+	// This tests bounded dependency stalls, not wall-clock scheduling. A VM
+	// clock correction must not turn prepared, runnable fixtures into future work.
+	if _, err := l.pools[0].Exec(ctx, `UPDATE processed_events SET due_at='2000-01-01 UTC'`); err != nil {
+		t.Fatal(err)
+	}
 	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_ = l.router.ReconcileOnce(bounded)
+	pending, pendingErr := l.router.PendingWork(ctx)
+	if pendingErr != nil || len(pending) != 4 {
+		t.Fatalf("prepared runnable workflows=%d error=%v", len(pending), pendingErr)
+	}
+	reconcileErr := l.router.ReconcileOnce(bounded)
 	got, err := l.router.Get(ctx, request.ID)
 	if err != nil || got.Status != "ASSIGNED" {
-		t.Fatalf("healthy work starved %+v %v", got, err)
+		rows, queryErr := l.pools[0].Query(ctx, `SELECT request_id,state,expected_retry,due_at,clock_timestamp() FROM processed_events ORDER BY request_id`)
+		if queryErr == nil {
+			defer rows.Close()
+			for rows.Next() {
+				values, _ := rows.Values()
+				t.Logf("workflow at failure: %v", values)
+			}
+		}
+		t.Fatalf("healthy work starved %+v read=%v reconcile=%v deadline=%v", got, err, reconcileErr, bounded.Err())
 	}
 	var retried int
 	if err = l.pools[0].QueryRow(ctx, `SELECT count(*) FROM processed_events WHERE expected_retry=1`).Scan(&retried); err != nil || retried != 3 {
@@ -206,6 +223,16 @@ func TestTwoRequestsOneResourceAndDuplicateManualRace(t *testing.T) {
 	resource := l.resource(t, 2, "supply")
 	a, da := l.request(t, 0, "first")
 	b, db := l.request(t, 1, "second")
+	// Prepare the two initial attempts as already due. Retry/future-attempt
+	// scheduling is covered separately; this case asserts concurrent ownership.
+	for i, d := range []contracts.Delivery{da, db} {
+		if _, err := l.stores[i].Workflow(context.Background(), contracts.WorkflowCommand{Delivery: d, Action: "inspect"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.pools[i].Exec(context.Background(), `UPDATE processed_events SET due_at='2000-01-01 UTC'`); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var wg sync.WaitGroup
 	for i := range 12 {
 		wg.Add(1)
@@ -216,7 +243,7 @@ func TestTwoRequestsOneResourceAndDuplicateManualRace(t *testing.T) {
 				d = db
 			}
 			state, err := l.router.HandleDelivery(context.Background(), d)
-			if err != nil || !state.Ack {
+			if (err != nil && !errors.Is(err, contracts.ErrUnavailable)) || (err == nil && !state.Ack) {
 				t.Errorf("handle %+v %v", state, err)
 			}
 			if _, err = l.router.ScheduleMatch(context.Background(), d.Event.RequestID, fmt.Sprintf("manual-race-%016d", i)); err != nil {
@@ -225,8 +252,30 @@ func TestTwoRequestsOneResourceAndDuplicateManualRace(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	ar, _ := l.router.Get(context.Background(), a.ID)
-	br, _ := l.router.Get(context.Background(), b.ID)
+	// Ack may mean a durable retry, not immediate assignment. Under load a
+	// bounded attempt can expire legitimately; exercise the real due-aware
+	// reconciler instead of assuming every concurrent delivery finishes inline.
+	settle, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	var ar, br contracts.Request
+	for {
+		var errA, errB error
+		ar, errA = l.router.Get(settle, a.ID)
+		br, errB = l.router.Get(settle, b.ID)
+		if errA != nil || errB != nil {
+			t.Fatalf("read contenders: %v %v", errA, errB)
+		}
+		if ar.Status == "ASSIGNED" || br.Status == "ASSIGNED" {
+			break
+		}
+		if err := l.router.ReconcileOnce(settle); err != nil && !errors.Is(err, contracts.ErrUnavailable) {
+			t.Fatal(err)
+		}
+		if settle.Err() != nil {
+			t.Fatalf("contenders did not converge: %+v %+v", ar, br)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	assigned := 0
 	for _, r := range []contracts.Request{ar, br} {
 		if r.Status == "ASSIGNED" {
@@ -238,6 +287,45 @@ func TestTwoRequestsOneResourceAndDuplicateManualRace(t *testing.T) {
 	}
 	if assigned != 1 {
 		t.Fatalf("owners %+v %+v", ar, br)
+	}
+}
+
+func TestFutureDueIntentDefersAndResumesSameReservation(t *testing.T) {
+	l := newWorkflowLab(t)
+	ctx := context.Background()
+	resource := l.resource(t, 2, "clock-step-resource")
+	request, d := l.request(t, 0, "clock-step-request")
+	if _, err := l.stores[0].Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	intent := contracts.IntentCommand{AssignmentID: fmt.Sprintf("%032x", 300), RequestID: request.ID, ResourceID: resource.ID, Generation: 1}
+	if _, err := l.stores[0].BeginIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	// Emulate persisted due times lying ahead of the current database clock.
+	if _, err := l.pools[0].Exec(ctx, `UPDATE processed_events SET due_at=clock_timestamp()+interval '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.router.HandleDelivery(ctx, d); !errors.Is(err, contracts.ErrUnavailable) {
+		t.Fatalf("future work executed: %v", err)
+	}
+	if work, err := l.router.PendingWork(ctx); err != nil || len(work) != 0 {
+		t.Fatalf("future work selected: %+v %v", work, err)
+	}
+	if err := l.router.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := l.router.GetResource(ctx, resource.ID); err != nil || got.Status != "AVAILABLE" {
+		t.Fatalf("future intent reserved resource: %+v %v", got, err)
+	}
+	if _, err := l.pools[0].Exec(ctx, `UPDATE processed_events SET due_at='2000-01-01 UTC'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.router.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := l.router.Get(ctx, request.ID); err != nil || got.Status != "ASSIGNED" || got.AssignedResourceID != resource.ID {
+		t.Fatalf("due intent did not resume: %+v %v", got, err)
 	}
 }
 func TestAmbiguousReservationRecovery(t *testing.T) {

@@ -7,3 +7,6 @@ DAY_PROGRESS.md
 **/.env
 bin
 *.log
+__pycache__
+.worktrees
+TRANSFER_CONTEXT.md

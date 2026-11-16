@@ -83,3 +83,7 @@ Outbox diagnostics separately showed that client cancellation can return before 
 
 The corrected pause and outbox tests passed twenty repetitions each. The clock-jump explanation considered during investigation was not confirmed by direct sampling and is not treated as an established root cause.
 Final follow-up validation: Linux build/vet/race passed; full replica integration passed (31.561 s); full SQL/broker integration passed (22.759 s) when run separately from image builds. An intervening broker run was invalidated by a test PostgreSQL backend exit and crash recovery; that failed run is not counted as passing. Recovery completed with the existing volumes, and the subsequent isolated run passed.
+
+## Final acceptance, 15–16 November 2026
+
+The dated [release evidence index](evidence-index.md) consolidates final results, the 30-request/five-client measurement, fresh bootstrap, recovery timings for all three pairs, runtime restoration and every failure investigated during this milestone. Final Linux build/vet/default race passed; full paired-replica integration passed in 15.839 s; ten repetitions each of five corrected fixture scenarios passed in 82.768 s; race-enabled SQL/broker integration passed in 22.531 s. Python workload, Node polling and PowerShell journal/bootstrap/rebuild-guard checks passed. Historical failed runs are explicitly retained rather than counted as passing evidence.

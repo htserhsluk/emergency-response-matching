@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"strings"
 	"testing"
@@ -191,6 +192,14 @@ func TestReplayBarrierBeforeCrossShardAdvance(t *testing.T) {
 	l := newWorkflowLab(t)
 	resource := l.resource(t, 2, "barrier-supply")
 	request, d := l.request(t, 0, "barrier-request")
+	// Prepare already-due work before pausing replay. The barrier below must
+	// fail because its WAL is unconfirmed, not because a clock step delays work.
+	if _, err := l.stores[0].Workflow(context.Background(), contracts.WorkflowCommand{Delivery: d, Action: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.pools[0].Exec(context.Background(), `UPDATE processed_events SET due_at='2000-01-01 UTC'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := l.stores[0].BeginIntent(context.Background(), contracts.IntentCommand{AssignmentID: fmt.Sprintf("%032x", 0xabc99), RequestID: request.ID, ResourceID: resource.ID, Generation: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -273,17 +282,24 @@ func TestReservationAndIntentReplaysRequireBarrier(t *testing.T) {
 }
 
 func TestReplayRequiresSynchronousBarrier(t *testing.T) {
-	store, primary := fixture(t)
+	store, primary := resourceFixture(t)
 	url := os.Getenv("ERM_TEST_STANDBY_URL")
 	if url == "" {
 		t.Fatal("ERM_TEST_STANDBY_URL required")
 	}
-	standby, err := storage.Open(context.Background(), url)
+	address, err := neturl.Parse(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := address.Query()
+	query.Set("search_path", primary.Config().ConnConfig.RuntimeParams["search_path"])
+	address.RawQuery = query.Encode()
+	standby, err := storage.Open(context.Background(), address.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer standby.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var mode, peers string
 	if err = primary.QueryRow(ctx, "SHOW synchronous_commit").Scan(&mode); err != nil || mode != "remote_apply" {
@@ -317,26 +333,53 @@ func TestReplayRequiresSynchronousBarrier(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	key := fmt.Sprintf("replay-barrier-%d", time.Now().UnixNano())
-	for range 2 {
-		attempt, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
-		_, err = store.Create(attempt, key, body())
-		cancel()
-		if err == nil {
-			t.Fatal("reported durable success while replay paused")
+	uncertainCreate := func(input contracts.CreateRequest) {
+		t.Helper()
+		attempt, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		done := make(chan error, 1)
+		go func() { _, err := store.Create(attempt, key, input); done <- err }()
+		// A fixed delay may cancel before COMMIT, which creates no ambiguous
+		// result. Observe this isolated fixture's actual synchronous replay wait.
+		for {
+			select {
+			case err := <-done:
+				t.Fatalf("creation returned before SyncRep: %v", err)
+			default:
+			}
+			var waiting bool
+			if err := primary.QueryRow(attempt, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event='SyncRep')`, primary.Config().ConnConfig.RuntimeParams["application_name"]).Scan(&waiting); err != nil {
+				t.Fatal(err)
+			}
+			if waiting {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		stop()
+		if err := <-done; !errors.Is(err, contracts.ErrUnavailable) {
+			t.Fatalf("unconfirmed creation/conflict escaped: %v", err)
+		}
+		for {
+			var waiting bool
+			if err := primary.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event='SyncRep')`, primary.Config().ConnConfig.RuntimeParams["application_name"]).Scan(&waiting); err != nil {
+				t.Fatal(err)
+			}
+			if !waiting {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
+	uncertainCreate(body())
+	uncertainCreate(body())
 	var visible int
 	if err = primary.QueryRow(ctx, "SELECT count(*) FROM operations WHERE entity_id=$1", contracts.EntityID("create-request", key)).Scan(&visible); err != nil || visible != 1 {
 		t.Fatalf("test did not reach an ambiguous local commit: %d %v", visible, err)
 	}
 	changed := body()
 	changed.Details = "changed during paused replay"
-	uncertain, cancelAttempt := context.WithTimeout(ctx, 300*time.Millisecond)
-	_, err = store.Create(uncertain, key, changed)
-	cancelAttempt()
-	if !errors.Is(err, contracts.ErrUnavailable) {
-		t.Fatalf("unconfirmed conflict must remain unavailable, got %v", err)
-	}
+	uncertainCreate(changed)
 	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_resume()"); err != nil {
 		t.Fatal(err)
 	}

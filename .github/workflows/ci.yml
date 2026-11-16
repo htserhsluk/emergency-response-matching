@@ -36,6 +36,8 @@ jobs:
       - run: go build ./cmd/...
       - run: go vet ./...
       - run: node --test internal/web/app_test.cjs
+      - run: python3 -m unittest discover -s scripts -p test_workload.py
+      - run: pwsh -NoProfile -File scripts/test-recovery-journal.ps1
       - run: docker run --rm --mount type=bind,source="$GITHUB_WORKSPACE",target=/src,readonly postgis/postgis:17-3.7@sha256:1f0d64ef12bfb344d3569ab6419aca183258b146951daec83f0585d01e6c9cc9 bash /src/scripts/test-rejoin-flush.sh
       - run: go test -race ./... -count=1
       - run: go test -tags=broker ./internal/broker -count=1 -v
