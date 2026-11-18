@@ -76,7 +76,7 @@ This revision implements the requested policy and usability changes described in
 | Build, vet, default Go race suite | Passed on Linux with the pinned Go toolchain |
 | Full SQL and paired-replica integration | Passed; includes search-progress synchronous replay barrier, recovery, contention and uncertain reservations |
 | Broker tests and SQL/broker race integration | Passed; integration race run completed in 34.442 seconds |
-| Browser logic regressions | 14 passed, covering stale responses, filters/paging, created-resource updates, map input/click synchronization, initial pins, polling, tile failure, resize and simulated geolocation outcomes |
+| Browser logic regressions | 15 passed, covering stale responses, filters/paging, created-resource updates, map input/click synchronization, initial pins, polling, tile failure, resize and simulated geolocation outcomes |
 | Workload harness and recovery-journal checks | Four Python tests and PowerShell journal regression passed |
 | Deployed seven-API acceptance | Passed on upgraded schema 7 deployment, including exact-location assignment and completion/history protection |
 | Deployed queue/scaling/restart rehearsal | 18 unique assignments; observed backlog at least 3 with workers stopped, then zero ready/unacknowledged; 1-to-2 workers, worker replacement, broker and coordinator restart passed |

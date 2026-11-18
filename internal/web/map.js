@@ -69,9 +69,18 @@ async function initializeMap(){
   const config=await api('/web-config');
   if(!config.tileUrl||new URLSearchParams(location.search).get('tiles')==='off'){mapElement('map-note').textContent='Background tiles disabled. Location pins and manual coordinates remain available.';return;}
   const text=document.createElement('span');text.textContent=config.attribution;
-  const layer=L.tileLayer(config.tileUrl,{maxZoom:19,attribution:text.innerHTML+' · <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener">Report a map issue</a>'}).addTo(responseMap);
-  layer.on('tileerror',()=>{mapElement('map-note').textContent='Background tiles unavailable. Pins and coordinates still work; matching is unaffected.';});
-  mapElement('map-note').textContent='Select the map or enter coordinates. Pins label selection, request and assigned resource.';
+  const layer=L.tileLayer(config.tileUrl,{maxZoom:19,attribution:text.innerHTML+' · <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener">Report a map issue</a>'});
+  let slowTimer,tileFailed=false;
+  const tileFailure=()=>{mapElement('map-note').textContent='Some background tiles unavailable. Pins and coordinates still work; matching is unaffected.';};
+  // Attach before adding the layer so the initial loading event is not missed.
+  layer.on('loading',()=>{
+   clearTimeout(slowTimer);tileFailed=false;
+   mapElement('map-note').textContent='Loading background map… pins and coordinates are ready to use.';
+   slowTimer=setTimeout(()=>{if(!tileFailed)mapElement('map-note').textContent='Background map is taking longer to load from the tile provider. You can keep using pins and coordinates; matching is unaffected.';},8000);
+  });
+  layer.on('tileerror',()=>{tileFailed=true;clearTimeout(slowTimer);tileFailure();});
+  layer.on('load',()=>{clearTimeout(slowTimer);if(tileFailed)tileFailure();else mapElement('map-note').textContent='Background map loaded. Select the map or enter coordinates; the legend identifies each pin.';});
+  layer.addTo(responseMap);
  }catch(e){mapElement('map-note').textContent='Map configuration unavailable. Pins and coordinates remain available.';}
 }
 initializeMap();
