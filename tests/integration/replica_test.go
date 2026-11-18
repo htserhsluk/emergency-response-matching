@@ -16,6 +16,42 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/storage"
 )
 
+func TestSearchProgressRequiresReplayBarrier(t *testing.T) {
+	s, _, _, d := workflowFixture(t)
+	ctx := context.Background()
+	if _, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	standby, err := storage.Open(ctx, os.Getenv("ERM_TEST_STANDBY_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Close()
+	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_pause()"); err != nil {
+		t.Fatal(err)
+	}
+	defer standby.Exec(context.Background(), "SELECT pg_wal_replay_resume()")
+	limited, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	_, err = s.Workflow(limited, contracts.WorkflowCommand{Delivery: d, Action: "advance", Progress: &contracts.SearchProgress{RadiusIndex: 1}})
+	cancel()
+	if err == nil {
+		t.Fatal("unreplicated search progress acknowledged")
+	}
+	if _, err = standby.Exec(ctx, "SELECT pg_wal_replay_resume()"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "inspect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Progress.RadiusIndex == 0 { // A canceled commit may not have reached local commit yet.
+		state, err = s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "advance", Progress: &contracts.SearchProgress{RadiusIndex: 1}})
+	}
+	if err != nil || state.Progress.RadiusIndex != 1 {
+		t.Fatal("cursor recovery failed", state, err)
+	}
+}
+
 func TestNotificationReplicaRecovery(t *testing.T) {
 	l := newWorkflowLab(t)
 	ctx := context.Background()

@@ -41,7 +41,7 @@ func serveResources(w http.ResponseWriter, r *http.Request, store Requests, part
 		}
 		result, err = s.Search(r.Context(), q)
 	} else if len(parts) == 1 && parts[0] == "resources" && r.Method == "GET" {
-		q := contracts.ListQuery{Limit: 20, After: r.URL.Query().Get("after")}
+		q := contracts.ListQuery{Limit: 20, After: r.URL.Query().Get("after"), Status: r.URL.Query().Get("status")}
 		if v := r.URL.Query().Get("limit"); v != "" {
 			q.Limit, err = strconv.Atoi(v)
 		}
@@ -50,7 +50,7 @@ func serveResources(w http.ResponseWriter, r *http.Request, store Requests, part
 			return
 		}
 		result, err = s.ListResources(r.Context(), q)
-	} else if len(parts) == 2 && internal && r.Method == "GET" {
+	} else if len(parts) == 2 && parts[0] == "resources" && r.Method == "GET" {
 		if _, err := routing.ShardFor(parts[1]); err != nil {
 			fail(w, contracts.ErrInvalid, "")
 			return
@@ -141,7 +141,7 @@ func (c *Client) SetResourceStatus(ctx context.Context, id, key, status string) 
 	return
 }
 func (c *Client) ListResources(ctx context.Context, q contracts.ListQuery) (out contracts.ResourcePage, err error) {
-	err = c.exchange(ctx, "GET", "/resources?limit="+strconv.Itoa(q.Limit)+"&after="+url.QueryEscape(q.After), "", nil, &out)
+	err = c.exchange(ctx, "GET", "/resources?limit="+strconv.Itoa(q.Limit)+"&after="+url.QueryEscape(q.After)+"&status="+url.QueryEscape(q.Status), "", nil, &out)
 	return
 }
 func (c *Client) Search(ctx context.Context, q contracts.SearchQuery) (out []contracts.Candidate, err error) {

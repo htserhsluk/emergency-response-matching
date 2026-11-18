@@ -89,7 +89,7 @@ Reference PDFs, the private handover, local credentials and execution checkpoint
 
 ## Matching and retry behaviour
 
-Matching searches by resource type, first within 5 km and then 10 km, ordered by observed geographical distance and stable ID. Every required shard must answer. The coordinator validates the candidate using PostGIS before reservation and serializes request mutations with a fixed set of 256 cancellable locks.
+Matching searches by resource type from zero distance through progressively larger radii up to global coverage, ordered by observed geographical distance and stable ID. Search progress is durably checkpointed between bounded attempts. Every required shard must answer. The coordinator validates the candidate using PostGIS before reservation and serializes request mutations with a fixed set of 256 cancellable locks.
 
 An intent is durable before reservation. Reservation atomically records success or definite rejection with resource allocation. Unknown outcomes retain the original assignment/resource IDs; reconciliation repeats the same attempt. Only a confirmed rejection permits another candidate. Finalization atomically records ASSIGNED and event completion. Public completion never releases the resource.
 
@@ -115,3 +115,5 @@ Map background tiles are optional. Use `?tiles=off` for the tile-free coordinate
 ```
 
 Run failure scripts sequentially in the local demonstration cluster. They stop pods and temporarily allow single-copy writes where explicitly documented, then restore paired synchronous operation. Preserve volumes and inspect a failed recovery before retrying. The inbox migration is version6; existing finalized assignments receive one historical inbox entry at migration time.
+
+See [expanded matching and UI changes](docs/expanded-matching.md) for the current policy, optional resource filters, location controls and upgrade notes.

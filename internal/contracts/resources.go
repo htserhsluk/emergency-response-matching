@@ -27,11 +27,17 @@ type Resource struct {
 	AssignedRequestID string    `json:"assignedRequestId,omitempty"`
 }
 type ListQuery struct {
-	Limit int    `json:"limit"`
-	After string `json:"after,omitempty"`
+	Limit  int    `json:"limit"`
+	After  string `json:"after,omitempty"`
+	Status string `json:"status,omitempty"`
 }
 
 func (q ListQuery) Validate() error {
+	switch q.Status {
+	case "", "UNALLOCATED", "AVAILABLE", "UNAVAILABLE", "ALLOCATED":
+	default:
+		return ErrInvalid
+	}
 	if q.Limit < 1 || q.Limit > 100 {
 		return ErrInvalid
 	}
@@ -61,7 +67,7 @@ type SearchQuery struct {
 }
 
 func (q SearchQuery) Validate() error {
-	if (CreateRequest{Type: q.Type, Location: q.Location, Details: "search"}).Validate() != nil || math.IsNaN(q.RadiusMeters) || math.IsInf(q.RadiusMeters, 0) || q.RadiusMeters <= 0 || q.RadiusMeters > 20000000 || math.IsNaN(q.AfterDistance) || math.IsInf(q.AfterDistance, 0) || q.AfterDistance < 0 {
+	if (CreateRequest{Type: q.Type, Location: q.Location, Details: "search"}).Validate() != nil || math.IsNaN(q.RadiusMeters) || math.IsInf(q.RadiusMeters, 0) || q.RadiusMeters < 0 || q.RadiusMeters > 20100000 || math.IsNaN(q.AfterDistance) || math.IsInf(q.AfterDistance, 0) || q.AfterDistance < 0 {
 		return ErrInvalid
 	}
 	if q.AfterID == "" && q.AfterDistance != 0 {

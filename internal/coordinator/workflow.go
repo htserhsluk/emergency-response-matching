@@ -51,6 +51,8 @@ func (r *Router) PendingWork(ctx context.Context) ([]contracts.Delivery, error) 
 	return fanout(ctx, r, func(ctx context.Context, n *httpapp.Client) ([]contracts.Delivery, error) { return n.PendingWork(ctx) })
 }
 
+var errSearchYield = errors.New("search processing budget reached")
+
 func (r *Router) HandleDelivery(parent context.Context, d contracts.Delivery) (contracts.WorkflowState, error) {
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
@@ -79,6 +81,9 @@ func (r *Router) HandleDelivery(parent context.Context, d contracts.Delivery) (c
 		return result, nil
 	}
 	action := "retry"
+	if errors.Is(err, errSearchYield) {
+		action = "yield"
+	}
 	if errors.Is(err, contracts.ErrInvalid) {
 		action = "pause"
 	}
@@ -109,41 +114,51 @@ func (r *Router) assign(ctx context.Context, n *httpapp.Client, d contracts.Deli
 			return state, err
 		}
 	}
-	attempts := 0
-	for _, radius := range []float64{5000, 10000} {
-		query := contracts.SearchQuery{Type: state.Request.Type, Location: state.Request.Location, RadiusMeters: radius, Limit: 20}
-		for {
-			candidates, err := r.Search(ctx, query)
+	steps := 0
+	for state.Progress.RadiusIndex < len(contracts.SearchRadii) {
+		if steps >= 16 {
+			return contracts.WorkflowState{}, errSearchYield
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < 300*time.Millisecond {
+			return contracts.WorkflowState{}, errSearchYield
+		}
+		steps++
+		progress := state.Progress
+		query := contracts.SearchQuery{Type: state.Request.Type, Location: state.Request.Location, RadiusMeters: contracts.SearchRadii[progress.RadiusIndex], Limit: 20, AfterID: progress.AfterID, AfterDistance: progress.AfterDistance}
+		candidates, err := r.Search(ctx, query)
+		if err != nil {
+			return contracts.WorkflowState{}, err
+		}
+		for _, candidate := range candidates {
+			if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < 400*time.Millisecond {
+				return contracts.WorkflowState{}, errSearchYield
+			}
+			command := contracts.IntentCommand{AssignmentID: contracts.EntityID("assignment", fmt.Sprintf("%s:%s", d.Event.EventID, candidate.ResourceID)), RequestID: d.Event.RequestID, ResourceID: candidate.ResourceID, Generation: d.Event.Generation, DistanceMeters: candidate.DistanceMeters}
+			intent, err := n.BeginIntent(ctx, command)
 			if err != nil {
 				return contracts.WorkflowState{}, err
 			}
-			if len(candidates) == 0 {
-				break
-			}
-			for _, candidate := range candidates {
-				attempts++
-				if attempts > 128 {
-					return contracts.WorkflowState{}, contracts.ErrUnavailable
-				}
-				command := contracts.IntentCommand{AssignmentID: contracts.EntityID("assignment", fmt.Sprintf("%s:%s", d.Event.EventID, candidate.ResourceID)), RequestID: d.Event.RequestID, ResourceID: candidate.ResourceID, Generation: d.Event.Generation, DistanceMeters: candidate.DistanceMeters}
-				intent, err := n.BeginIntent(ctx, command)
-				if err != nil {
-					return contracts.WorkflowState{}, err
-				}
-				if intent.Phase == "REJECTED" {
-					continue
-				}
+			if intent.Phase != "REJECTED" {
 				state, err = reserve(intent)
 				if err != nil || state.Ack {
 					return state, err
 				}
 			}
-			last := candidates[len(candidates)-1]
-			query.AfterID = last.ResourceID
-			query.AfterDistance = last.DistanceMeters
-			if len(candidates) < query.Limit {
-				break
+			progress.AfterID = candidate.ResourceID
+			progress.AfterDistance = candidate.DistanceMeters
+			state, err = n.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "advance", Progress: &progress})
+			if err != nil || state.Ack {
+				return state, err
 			}
+		}
+		if len(candidates) < query.Limit {
+			progress = contracts.SearchProgress{RadiusIndex: progress.RadiusIndex + 1}
+		} else {
+			continue
+		}
+		state, err = n.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "advance", Progress: &progress})
+		if err != nil || state.Ack {
+			return state, err
 		}
 	}
 	return n.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "unmatched"})
@@ -161,7 +176,7 @@ func (r *Router) validateCandidate(ctx context.Context, request contracts.Reques
 	if err != nil {
 		return err
 	}
-	if candidate.ResourceID != intent.ResourceID || candidate.DistanceMeters > 10000 || math.Abs(candidate.DistanceMeters-intent.DistanceMeters) > 0.000001 {
+	if candidate.ResourceID != intent.ResourceID || candidate.DistanceMeters > contracts.SearchRadii[len(contracts.SearchRadii)-1] || math.Abs(candidate.DistanceMeters-intent.DistanceMeters) > 0.000001 {
 		return contracts.ErrInvalid
 	}
 	return nil

@@ -17,3 +17,9 @@ Coordinate forms, status and inbox do not depend on successful tile loading or t
 ## Inbox
 
 One shared local recipient (`demo`) receives an assignment notification in the same database transaction as finalization. Repeated deliveries do not create duplicate notifications. Read state is persisted on the request shard, with the same synchronous replay barrier as other mutations. The UI refreshes from the beginning on every poll so random IDs cannot hide later inserts. Cursor paging is explicit and is not a real-time event stream.
+
+## Revised directory and location controls
+
+The resource directory defaults to AVAILABLE and UNAVAILABLE together. Choose Available, Unavailable or Allocation history to filter on the server before pagination. Changing filters or refreshing returns to the first page; records are ordered by ID, not creation time. The just-created resource has its own card and lookup, so it is visible even when absent from the first directory page. Completed allocations stay in history.
+
+Selection uses an amber diamond, request a blue R, and assigned resource a teal plus, with a legend and labels. Valid coordinate input updates selection without changing partial typing or panning on each keystroke. Use my location requests permission only when clicked; location can be approximate, poor accuracy is rejected, and manual selection remains available. Polling preserves the view unless relevant request/assignment coordinates change. Matching progress distinguishes searching/retrying/paused/global exhaustion and historical limited-search results.
