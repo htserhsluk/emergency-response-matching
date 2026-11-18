@@ -17,7 +17,7 @@
         "containers": [
           {
             "name": "initialize",
-            "image": "erm-coordinator:day4",
+            "image": "erm-coordinator:expanded",
             "imagePullPolicy": "Never",
             "args": [
               "init-control",

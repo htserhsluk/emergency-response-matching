@@ -29,6 +29,7 @@ type workflowLab struct {
 	pools        [3]*pgxpool.Pool
 	loseReserve  atomic.Bool
 	stallReserve atomic.Bool
+	slowIntents  atomic.Bool
 }
 
 func newWorkflowLab(t *testing.T) *workflowLab {
@@ -40,6 +41,9 @@ func newWorkflowLab(t *testing.T) *workflowLab {
 		l.pools[i] = p
 		handler := httpapp.NewServer(s, "workflow-secret-at-least-32-characters", true)
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/internal/commands/intent" && l.slowIntents.Load() {
+				time.Sleep(120 * time.Millisecond)
+			}
 			if i == 2 && r.URL.Path == "/internal/commands/reserve" && l.stallReserve.Load() {
 				io.Copy(io.Discard, r.Body)
 				select {
@@ -62,6 +66,50 @@ func newWorkflowLab(t *testing.T) *workflowLab {
 	}
 	l.restart()
 	return l
+}
+
+func TestSlowDefinitiveCandidatesPersistWithinPage(t *testing.T) {
+	l := newWorkflowLab(t)
+	ctx := context.Background()
+	r, d := l.request(t, 0, "slow-candidate-search")
+	for i := 0; i < 20; i++ {
+		supply := l.resource(t, 1, fmt.Sprintf("rejected-again-%d", i))
+		c := contracts.IntentCommand{AssignmentID: contracts.EntityID("assignment", d.Event.EventID+":"+supply.ID), RequestID: r.ID, ResourceID: supply.ID, Generation: 1, DistanceMeters: 0}
+		_, err := l.pools[0].Exec(ctx, `INSERT INTO assignment_attempts(assignment_id,request_id,resource_id,generation,distance_meters,payload_hash,phase) VALUES($1,$2,$3,1,0,$4,'REJECTED')`, c.AssignmentID, r.ID, supply.ID, contracts.PayloadHash(c))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	winner, err := l.router.RegisterResource(ctx, keyOnShard("register-resource", 2, "after-slow-rejections"), resourceBody(0.001, 0, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.slowIntents.Store(true)
+	state, err := l.router.HandleDelivery(ctx, d)
+	if err != nil || !state.Ack {
+		t.Fatal(state, err)
+	}
+	var after string
+	var remaining int
+	if err = l.pools[0].QueryRow(ctx, `SELECT search_after_id,retry_limit-expected_retry FROM processed_events WHERE request_id=$1`, r.ID).Scan(&after, &remaining); err != nil {
+		t.Fatal(err)
+	}
+	if after == "" || remaining != 3 {
+		t.Fatalf("no bounded candidate progress: cursor=%q budget=%d", after, remaining)
+	}
+	for attempt := 0; attempt < 6; attempt++ {
+		if err = l.router.ReconcileOnce(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got, e := l.router.Get(ctx, r.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if got.AssignedResourceID == winner.ID {
+			return
+		}
+	}
+	t.Fatal("bounded continuations never reached eligible resource")
 }
 
 func TestAssignmentTimeoutPersistsBackoffWithoutStarvingReconciliation(t *testing.T) {
@@ -173,16 +221,52 @@ func TestMatchingExpandsRadiusAndRejectsWrongType(t *testing.T) {
 		t.Fatalf("radius/type matching %+v %v", state, err)
 	}
 	_, second := l.request(t, 0, "exhausted-radius")
-	if _, err = l.router.RegisterResource(ctx, keyOnShard("register-resource", 2, "too-far"), resourceBody(0.2, 0, true)); err != nil {
+	distant, err := l.router.RegisterResource(ctx, keyOnShard("register-resource", 2, "distant"), resourceBody(14, 75.5, true))
+	if err != nil {
 		t.Fatal(err)
 	}
 	state, err = l.router.HandleDelivery(ctx, second)
-	if err != nil || state.Request.Status != "UNMATCHED" {
-		t.Fatalf("outside radius matched %+v %v", state, err)
+	if err != nil || state.Request.AssignedResourceID != distant.ID {
+		t.Fatalf("distant resource not matched %+v %v", state, err)
 	}
 }
 func (l *workflowLab) restart() {
 	l.router = coordinator.NewRouter(l.urls, "workflow-secret-at-least-32-characters")
+}
+
+func TestGlobalSearchExhaustionAndNewGeneration(t *testing.T) {
+	l := newWorkflowLab(t)
+	ctx := context.Background()
+	r, d := l.request(t, 0, "global-empty")
+	state, err := l.router.HandleDelivery(ctx, d)
+	if err != nil || state.Request.Status != "UNMATCHED" || state.Progress.RadiusIndex != len(contracts.SearchRadii) {
+		t.Fatal("incomplete global exhaustion", state, err)
+	}
+	// A resource near the antipode must be covered by the final radius.
+	supply, err := l.router.RegisterResource(ctx, keyOnShard("register-resource", 2, "antipodal"), resourceBody(0, 179.99, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := l.router.ScheduleMatch(ctx, r.ID, "restart-global-search-0001")
+	if err != nil || next.Generation != 2 {
+		t.Fatal(next, err)
+	}
+	var payload []byte
+	err = l.pools[0].QueryRow(ctx, `SELECT payload,delivery_id,retry_number,destination FROM outbox_events WHERE request_id=$1 AND generation=2`, r.ID).Scan(&payload, &d.DeliveryID, &d.RetryNumber, &d.Destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(payload, &d.Event); err != nil {
+		t.Fatal(err)
+	}
+	state, err = l.stores[0].Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "inspect"})
+	if err != nil || state.Progress.RadiusIndex != 0 {
+		t.Fatal("new generation did not reset", state, err)
+	}
+	state, err = l.router.HandleDelivery(ctx, d)
+	if err != nil || state.Request.AssignedResourceID != supply.ID {
+		t.Fatal("antipodal resource omitted", state, err)
+	}
 }
 func keyOnShard(kind string, shard int, tag string) string {
 	for n := 0; ; n++ {

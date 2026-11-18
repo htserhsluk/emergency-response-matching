@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,66 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestFilteredResourcePagesAcrossShards(t *testing.T) {
+	const secret = "filtered-resource-secret-32-chars"
+	var urls [3]string
+	var servers [3]*httptest.Server
+	want := map[string][]string{}
+	for shard := range 3 {
+		s, pool := resourceFixture(t)
+		servers[shard] = httptest.NewServer(httpapp.NewServer(s, secret, true))
+		t.Cleanup(servers[shard].Close)
+		urls[shard] = servers[shard].URL
+		for i, status := range []string{"ALLOCATED", "AVAILABLE", "UNAVAILABLE", "ALLOCATED", "AVAILABLE"} {
+			id := contracts.EntityID("register-resource", keyOnShard("register-resource", shard, fmt.Sprintf("filtered-%d-%d", shard, i)))
+			_, err := pool.Exec(context.Background(), `INSERT INTO resources(id,type,location,availability,status,assigned_request_id) VALUES($1,'WATER',ST_SetSRID(ST_MakePoint(0,0),4326)::geography,$2,$3,CASE WHEN $3='ALLOCATED' THEN repeat('a',32) ELSE NULL END)`, id, status == "AVAILABLE", status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want[status] = append(want[status], id)
+			want[""] = append(want[""], id)
+			if status != "ALLOCATED" {
+				want["UNALLOCATED"] = append(want["UNALLOCATED"], id)
+			}
+		}
+	}
+	router := coordinator.NewRouter(urls, secret)
+	coord := httptest.NewServer(httpapp.NewServer(router, secret, true))
+	defer coord.Close()
+	api := httptest.NewServer(httpapp.NewServer(httpapp.NewClient(coord.URL, secret), "", false))
+	defer api.Close()
+	client := httpapp.NewPublicClient(api.URL)
+	allocated, lookupErr := client.GetResource(context.Background(), want["ALLOCATED"][0])
+	if lookupErr != nil || allocated.AssignedRequestID != strings.Repeat("a", 32) {
+		t.Fatalf("public lookup lost allocation association: %+v %v", allocated, lookupErr)
+	}
+	for status, expected := range want {
+		sort.Strings(expected)
+		var got []string
+		q := contracts.ListQuery{Limit: 2, Status: status}
+		for pages := 0; pages < 20; pages++ {
+			page, err := client.ListResources(context.Background(), q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, item := range page.Items {
+				got = append(got, item.ID)
+			}
+			if page.Next == "" {
+				break
+			}
+			q.After = page.Next
+		}
+		if strings.Join(got, ",") != strings.Join(expected, ",") {
+			t.Fatalf("filter %q got %v want %v", status, got, expected)
+		}
+	}
+	servers[1].Close()
+	if _, err := client.ListResources(context.Background(), contracts.ListQuery{Limit: 2, Status: "UNALLOCATED"}); !errors.Is(err, contracts.ErrUnavailable) {
+		t.Fatalf("partial filtered success: %v", err)
+	}
+}
 
 // Each resource test owns a schema, so spatial/list assertions cannot see prior runs.
 func resourceFixture(t *testing.T) (*storage.Store, *pgxpool.Pool) {
@@ -48,7 +109,7 @@ func resourceFixture(t *testing.T) (*storage.Store, *pgxpool.Pool) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, file := range []string{"00001_core.sql", "00002_resources.sql", "00003_assignment.sql", "00004_delivery.sql", "00005_workflow.sql", "00006_notifications.sql"} {
+	for _, file := range []string{"00001_core.sql", "00002_resources.sql", "00003_assignment.sql", "00004_delivery.sql", "00005_workflow.sql", "00006_notifications.sql", "00007_search_progress.sql"} {
 		b, err := os.ReadFile("../../migrations/" + file)
 		if err != nil {
 			t.Fatal(err)
@@ -140,6 +201,35 @@ func TestResourceSpatialSearchAndPagination(t *testing.T) {
 		if r.ID <= page.Next {
 			t.Fatal("cursor repeated item")
 		}
+	}
+}
+
+func TestSearchExactLocationRadiusBoundaryAndTieOrder(t *testing.T) {
+	s, p := resourceFixture(t)
+	ctx := context.Background()
+	for _, id := range []string{strings.Repeat("1", 32), strings.Repeat("2", 32)} {
+		if _, err := p.Exec(ctx, `INSERT INTO resources(id,type,location,availability,status) VALUES($1,'WATER',ST_SetSRID(ST_MakePoint(0,0),4326)::geography,true,'AVAILABLE')`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	boundary := strings.Repeat("3", 32)
+	if _, err := p.Exec(ctx, `INSERT INTO resources(id,type,location,availability,status) VALUES($1,'WATER',ST_Project(ST_SetSRID(ST_MakePoint(0,0),4326)::geography,1000,0),true,'AVAILABLE')`, boundary); err != nil {
+		t.Fatal(err)
+	}
+	q := contracts.SearchQuery{Type: "WATER", Location: body().Location, RadiusMeters: 0, Limit: 20}
+	got, err := s.Search(ctx, q)
+	if err != nil || len(got) != 2 || got[0].ResourceID != strings.Repeat("1", 32) || got[1].ResourceID != strings.Repeat("2", 32) {
+		t.Fatal("exact location or tie order", got, err)
+	}
+	q.RadiusMeters = 1000
+	got, err = s.Search(ctx, q)
+	if err != nil || len(got) != 3 {
+		t.Fatal("inclusive radius boundary", got, err)
+	}
+	q.RadiusMeters = 999.99
+	got, err = s.Search(ctx, q)
+	if err != nil || len(got) != 2 {
+		t.Fatal("outside radius included", got, err)
 	}
 }
 

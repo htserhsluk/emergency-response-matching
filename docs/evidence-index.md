@@ -1,6 +1,6 @@
 # Release acceptance evidence
 
-Recorded 15–16 November 2026, Asia/Calcutta. Day5 begins from merged Day4 revision `8b28d88`, containing application fix `24ba6f8`. Historical checks are in [test-results.md](test-results.md); this page records fresh release checks separately. Requirements map: [requirements.md](requirements.md).
+Recorded 15–16 November 2026, Asia/Calcutta. Day5 begins from merged Day 4 revision `8b28d88`, containing application fix `24ba6f8`. Historical checks are in [test-results.md](test-results.md); this page records fresh release checks separately. Requirements map: [requirements.md](requirements.md).
 
 ## Fresh results
 
@@ -55,7 +55,7 @@ Percentiles use nearest rank. Assignment times include HTTP/polling overhead. Th
 
 ## Application image identities
 
-Application source remains Day4 `24ba6f8`; Day5 changes acceptance tooling, diagnostic test output and documentation. Existing application images were built sequentially from that source with bounded compiler concurrency; the fresh install uses these exact artifacts rather than rebuilding unmodified application code.
+Application source remains Day 4 `24ba6f8`; Day5 changes acceptance tooling, diagnostic test output and documentation. Existing application images were built sequentially from that source with bounded compiler concurrency; the fresh install uses these exact artifacts rather than rebuilding unmodified application code.
 
 | Local tag | Image ID (SHA256) |
 |---|---|
@@ -66,3 +66,28 @@ Application source remains Day4 `24ba6f8`; Day5 changes acceptance tooling, diag
 | erm-migrate:day4 | 5108f5c344dd13df40107af055b82d415c03b45837ea51de9254704262a40e96 |
 
 These are local image IDs, not registry release digests. Pinned base images/dependencies are in source manifests and [versions.md](versions.md). A course-specific package and students' explanation/live presentation are not automatically satisfied by this index.
+
+## Expanded matching and interface revision — 18–19 November 2026
+
+This revision implements the requested policy and usability changes described in [expanded matching](expanded-matching.md). Earlier milestones above remain historical evidence, not claims that the new policy still stops at 10 km.
+
+| Check | Observed result |
+|---|---|
+| Build, vet, default Go race suite | Passed on Linux with the pinned Go toolchain |
+| Full SQL and paired-replica integration | Passed; includes search-progress synchronous replay barrier, recovery, contention and uncertain reservations |
+| Broker tests and SQL/broker race integration | Passed; integration race run completed in 34.442 seconds |
+| Browser logic regressions | 14 passed, covering stale responses, filters/paging, created-resource updates, map input/click synchronization, initial pins, polling, tile failure, resize and simulated geolocation outcomes |
+| Workload harness and recovery-journal checks | Four Python tests and PowerShell journal regression passed |
+| Deployed seven-API acceptance | Passed on upgraded schema 7 deployment, including exact-location assignment and completion/history protection |
+| Deployed queue/scaling/restart rehearsal | 18 unique assignments; observed backlog at least 3 with workers stopped, then zero ready/unacknowledged; 1-to-2 workers, worker replacement, broker and coordinator restart passed |
+| Deployed inbox recovery | Read state survived API restart, shard0 promotion and standby rebuild; paired synchronous mode restored |
+| Live UI workflow | Registered MEDICINE at (-64,43), requested it at (-65,43), assigned at an observed 111,485 m, marked notification read and request completed; resource stayed allocated and absent from unallocated directory |
+| Desktop/mobile and tile-free layout | Initial selection present;390 px viewport had 375 px client/scroll width with no horizontal overflow; distinct overlapping selection/request pins and assigned-resource pin verified |
+
+Before additive migration 7, SQL backups and per-shard count/history fingerprints were saved privately. Immediately after upgrade, before new test fixtures, requests remained 66/53/54 and resources 88/78/76; all three allocated-history fingerprints were identical. No prior resource or allocation was reset. Subsequent acceptance fixtures intentionally add records and retain them. All three replicas were streaming synchronously after recovery.
+
+The original refresh was HTTP 200 with 20 records in deterministic ID order: missing feedback, rather than a failed request, caused the confusion. Baseline map inspection confirmed no initial selection marker. Live checking caught a further coordinate-input event gap; a regression first failed with the old pin coordinates, then passed after immediate input synchronization. The deployed fix was checked with selection and request at the same position and resource 111 km away.
+
+Geolocation success, denial, timeout, unsupported browser, inaccurate results and stale callbacks are exercised with controlled browser-boundary test doubles. Physical GPS accuracy and every browser's permission-dialog appearance are not claimed. These are local functional/recovery checks, not production HA, optimal routing, emergency triage or throughput guarantees. Windows restricted-shell coordinator fsync/readiness checks failed due to access restrictions; the unchanged durability logic passed the Linux full suite. Initial isolated standby permissions and an invalid broker host port were corrected before the successful suites.
+
+The existing `erm-lab` data and separate stopped `erm-release` profile are retained. Application images now use the `expanded` tag; schema 7 is additive and rejects destructive rollback. Main merging remains user-controlled.

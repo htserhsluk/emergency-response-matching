@@ -29,8 +29,12 @@ Leaflet1.9.4 stable is vendored from the version-pinned npm distribution with it
 - leaflet.js SHA256: db49d009c841f5ca34a888c96511ae936fd9f5533e90d8b2c4d57596f4e5641a
 - leaflet.css SHA256: a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6
 
-Current manifests use day4 application/migration tags. Schema version6 adds durable notifications. Earlier Day2/Day3 resource statements above are historical; two-worker deployment was demonstrated in Day3, with Day4 regression evidence recorded separately.
+Current manifests use day4 application/migration tags. Schema version6 adds durable notifications. Earlier Day2/Day3 resource statements above are historical; two-worker deployment was demonstrated in Day3, with Day 4 regression evidence recorded separately.
 
 ## Final acceptance environment
 
-The15–16 November rehearsal used Docker Engine29.9.1, the same pinned application/database/broker artifacts, Minikube1.39.0/Kubernetes1.36.1 and schema6. Python3 standard library runs the optional workload harness; it is not an application runtime dependency. The original `erm-lab` and independent fresh `erm-release` profile each allocate two CPUs/3GiB and were run one at a time. See [release evidence](evidence-index.md) for measured workload, exact local image IDs, independent recovery timings and observed limitations.
+The15–16 November rehearsal used Docker Engine29.9.1, the same pinned application/database/broker artifacts, Minikube1.39.0/Kubernetes1.36.1 and schema 6. Python3 standard library runs the optional workload harness; it is not an application runtime dependency. The original `erm-lab` and independent fresh `erm-release` profile each allocate two CPUs/3GiB and were run one at a time. See [release evidence](evidence-index.md) for measured workload, exact local image IDs, independent recovery timings and observed limitations.
+
+## Expanded matching revision
+
+Current manifests use `expanded` application/migration tags and schema 7 (persisted matching search progress). Go, PostgreSQL/PostGIS, RabbitMQ and Leaflet dependency versions remain unchanged. The Day 4/schema 6 and final-acceptance descriptions above identify previous milestones. See the 18–19 November entry in [evidence](evidence-index.md) for current validation and data-preservation checks.

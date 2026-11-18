@@ -28,3 +28,7 @@ This index covers the assignment's twelve sections as R01–R15. The private ass
 | E2: atomic durable shared inbox, polling/paging, idempotent read state through restart/promotion | migration6, notification integration/replica tests, `test-k8s-inbox-recovery.ps1`, [inbox API](inbox-api.md) |
 
 SSE, external email delivery, private user accounts, automatic failover elections and cloud deployment are not implemented or silently claimed as extras.
+
+## 18 November revision
+
+The new progressive-global policy supersedes the original handover5/10km design, not the mandatory PDF obligations. [Revision details](expanded-matching.md) map the changes and retained invariants. R01/R08/R14 now also have zero/boundary/global/continuation regression coverage. R06 preserves the seven APIs while adding optional status filters and resource lookup. E1 adds explicit optional geolocation, distinct pins and stale-view protection; E2 retains durable inbox and adds response sequencing. Existing allocation history is retained, not released by completion.

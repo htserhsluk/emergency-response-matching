@@ -27,3 +27,11 @@ GET assignment includes stored distance; resource coordinates are optional when 
 Typed `/internal/data/request:{id}` and `resource:{id}` provide safe CRUD; deletion refuses records with operation, event or assignment history. Internal intent, reservation, candidate, workflow, outbox claim/sent and pending commands preserve the same invariants. Finalize/reject/unmatched orchestration is private to the coordinator, not trusted caller assertions. See `internal/httpapp` and `TestCoordinatorRejectsUnsafeAssignmentCommands`.
 
 `/health/live` checks process health. `/health/ready` represents service-specific dependencies; Kubernetes API traffic intentionally uses process serving readiness to retain partial-shard availability. Keep management/DB ports local and secrets outside source control.
+
+## Optional resource views and matching progress
+
+`GET /resources` without filters retains the original all-status, ascending-ID result and `{items,next}` cursor. Optional `status` accepts `UNALLOCATED` (AVAILABLE and UNAVAILABLE), `AVAILABLE`, `UNAVAILABLE`, or `ALLOCATED`; unknown values return400. Filtering occurs before each shard limit, then all shard results are merged in ID order. Reuse `next` only with the same filter; changing a filter starts with an empty `after`. This is live keyset pagination, not a snapshot: concurrent status changes may move records between views. Refresh starts at the first page. An extra terminal empty page remains possible under the compatible cursor contract.
+
+`GET /resources/{id}` is an additive public lookup returning the resource including its saved `assignedRequestId`, or404. It supports the recently registered resource card independently of list ordering. No required endpoint was removed.
+
+`GET /requests/{id}` may include `matching: {state,radiusMeters,reason?}`. States distinguish SEARCHING, RETRYING (uncertain/dependency processing), PAUSED, EXHAUSTED (complete current global search), ASSIGNED and LEGACY_UNMATCHED (historical limited search). A newly queued request may not yet have a matching summary. Public request status vocabulary remains unchanged. Retry a historical UNMATCHED request to start a new global generation; existing allocations and uncertain reservations are never reset.

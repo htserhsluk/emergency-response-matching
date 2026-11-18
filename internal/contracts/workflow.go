@@ -9,10 +9,11 @@ type CandidateQuery struct {
 }
 
 type WorkflowCommand struct {
-	Delivery     Delivery `json:"delivery"`
-	Action       string   `json:"action"`
-	AssignmentID string   `json:"assignmentId,omitempty"`
-	Reason       string   `json:"reason,omitempty"`
+	Delivery     Delivery        `json:"delivery"`
+	Action       string          `json:"action"`
+	AssignmentID string          `json:"assignmentId,omitempty"`
+	Reason       string          `json:"reason,omitempty"`
+	Progress     *SearchProgress `json:"progress,omitempty"`
 }
 
 func (c WorkflowCommand) Validate() error {
@@ -21,21 +22,25 @@ func (c WorkflowCommand) Validate() error {
 		return ErrInvalid
 	}
 	switch c.Action {
-	case "inspect", "finalize", "reject", "unmatched", "retry", "pause", "redrive":
+	case "inspect", "finalize", "reject", "unmatched", "retry", "pause", "redrive", "advance", "yield":
 	default:
 		return ErrInvalid
 	}
 	if len(c.Reason) > 256 {
 		return ErrInvalid
 	}
+	if c.Action == "advance" && (c.Progress == nil || c.Progress.Validate() != nil) {
+		return ErrInvalid
+	}
 	return nil
 }
 
 type WorkflowState struct {
-	Request       Request   `json:"request"`
-	Intent        *Intent   `json:"intent,omitempty"`
-	State         string    `json:"state"`
-	ExpectedRetry int       `json:"expectedRetry"`
-	DueAt         time.Time `json:"dueAt"`
-	Ack           bool      `json:"ack"`
+	Request       Request        `json:"request"`
+	Intent        *Intent        `json:"intent,omitempty"`
+	State         string         `json:"state"`
+	ExpectedRetry int            `json:"expectedRetry"`
+	DueAt         time.Time      `json:"dueAt"`
+	Ack           bool           `json:"ack"`
+	Progress      SearchProgress `json:"progress"`
 }

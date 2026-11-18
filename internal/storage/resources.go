@@ -119,7 +119,7 @@ func (s *Store) ListResources(ctx context.Context, q contracts.ListQuery) (contr
 	if q.Validate() != nil {
 		return out, contracts.ErrInvalid
 	}
-	rows, err := s.pool.Query(ctx, `SELECT `+resourceColumns+` FROM resources WHERE id>$1 ORDER BY id LIMIT $2`, q.After, q.Limit)
+	rows, err := s.pool.Query(ctx, `SELECT `+resourceColumns+` FROM resources WHERE id>$1 AND ($3='' OR status=$3 OR ($3='UNALLOCATED' AND status IN ('AVAILABLE','UNAVAILABLE'))) ORDER BY id LIMIT $2`, q.After, q.Limit, q.Status)
 	if err != nil {
 		return out, err
 	}

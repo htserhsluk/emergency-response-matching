@@ -119,6 +119,9 @@ func (s *Store) Workflow(ctx context.Context, c contracts.WorkflowCommand) (cont
 	if d.RetryNumber > out.ExpectedRetry {
 		return out, contracts.ErrInvalid
 	}
+	if err = tx.QueryRow(ctx, `SELECT search_radius,search_after_id,search_after_distance FROM processed_events WHERE event_id=$1`, e.EventID).Scan(&out.Progress.RadiusIndex, &out.Progress.AfterID, &out.Progress.AfterDistance); err != nil {
+		return out, err
+	}
 	// A redrive is conditional on the paused attempt: repeating it cannot add work.
 	if c.Action == "redrive" && out.State == "PAUSED" && d.RetryNumber == out.ExpectedRetry {
 		out.ExpectedRetry++
@@ -161,6 +164,35 @@ func (s *Store) Workflow(ctx context.Context, c contracts.WorkflowCommand) (cont
 	}
 	switch c.Action {
 	case "inspect":
+	case "advance":
+		if out.Intent != nil || out.Request.Status != "PENDING" {
+			return out, contracts.ErrConflict
+		}
+		p := *c.Progress
+		old := out.Progress
+		// Only monotonically advance within a radius, or move exactly one radius.
+		if p.RadiusIndex == old.RadiusIndex {
+			if p.AfterID == "" || p.AfterDistance < old.AfterDistance || (p.AfterDistance == old.AfterDistance && p.AfterID <= old.AfterID) {
+				return out, contracts.ErrConflict
+			}
+		} else if p.RadiusIndex != old.RadiusIndex+1 || p.AfterID != "" || p.AfterDistance != 0 {
+			return out, contracts.ErrConflict
+		}
+		if _, err = tx.Exec(ctx, `UPDATE processed_events SET search_radius=$2,search_after_id=$3,search_after_distance=$4 WHERE event_id=$1`, e.EventID, p.RadiusIndex, p.AfterID, p.AfterDistance); err != nil {
+			return out, err
+		}
+		out.Progress = p
+	case "yield":
+		// Progress is not a dependency failure; preserve the remaining retry budget.
+		out.ExpectedRetry++
+		out.DueAt = databaseNow
+		if _, err = tx.Exec(ctx, `UPDATE processed_events SET expected_retry=$2,retry_limit=retry_limit+1,due_at=$3,last_error='SEARCH_CONTINUING' WHERE event_id=$1`, e.EventID, out.ExpectedRetry, out.DueAt); err != nil {
+			return out, err
+		}
+		if err = insertDelivery(ctx, tx, e, out.ExpectedRetry, "request.match", out.DueAt); err != nil {
+			return out, err
+		}
+		out.Ack = true
 	case "finalize", "reject":
 		if out.Intent == nil || out.Intent.AssignmentID != c.AssignmentID || out.Intent.Phase != "INTENT" || out.Request.Status != "ASSIGNING" {
 			return out, contracts.ErrConflict
@@ -192,7 +224,7 @@ func (s *Store) Workflow(ctx context.Context, c contracts.WorkflowCommand) (cont
 			out.Intent = nil
 		}
 	case "unmatched":
-		if out.Intent != nil || out.Request.Status != "PENDING" {
+		if out.Intent != nil || out.Request.Status != "PENDING" || out.Progress.RadiusIndex != len(contracts.SearchRadii) {
 			return out, contracts.ErrConflict
 		}
 		if _, err = tx.Exec(ctx, `UPDATE requests SET status='UNMATCHED',version=version+1 WHERE id=$1`, e.RequestID); err != nil {

@@ -5,11 +5,59 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/htserhsluk/emergency-response-matching/internal/contracts"
 	"github.com/htserhsluk/emergency-response-matching/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"testing"
 )
+
+func TestSearchContinuationPersistsWithoutSpendingFailureBudget(t *testing.T) {
+	s, p, r, d := workflowFixture(t)
+	ctx := context.Background()
+	if _, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "advance", Progress: &contracts.SearchProgress{RadiusIndex: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "yield"})
+	if err != nil || !state.Ack || state.ExpectedRetry != 1 {
+		t.Fatal(state, err)
+	}
+	var remaining int
+	if err = p.QueryRow(ctx, `SELECT retry_limit-expected_retry FROM processed_events WHERE request_id=$1`, r.ID).Scan(&remaining); err != nil || remaining != 3 {
+		t.Fatal("continuation spent failure budget", remaining, err)
+	}
+	d.RetryNumber = 1
+	d.DeliveryID = contracts.DeliveryID(d.Event.EventID, 1, "request.match")
+	state, err = storage.New(p).Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "inspect"})
+	if err != nil || state.Progress.RadiusIndex != 1 {
+		t.Fatal("lost progress across restart", state, err)
+	}
+	got, err := s.Get(ctx, r.ID)
+	data, _ := json.Marshal(got)
+	var fields map[string]any
+	json.Unmarshal(data, &fields)
+	if err != nil || fields["matching"] == nil {
+		t.Fatalf("missing public search progress: %s %v", data, err)
+	}
+}
+
+func TestLegacyUnmatchedDoesNotClaimGlobalExhaustion(t *testing.T) {
+	s, p, r, d := workflowFixture(t)
+	ctx := context.Background()
+	if _, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Exec(ctx, `UPDATE requests SET status='UNMATCHED' WHERE id=$1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, r.ID)
+	if err != nil || got.Matching == nil || got.Matching.State != "LEGACY_UNMATCHED" {
+		t.Fatal("old limited search falsely labeled global", got, err)
+	}
+}
 
 func workflowFixture(t *testing.T) (*storage.Store, *pgxpool.Pool, contracts.Request, contracts.Delivery) {
 	t.Helper()
@@ -131,6 +179,14 @@ func TestStaleGenerationNoOpAndUnscheduledFutureRejected(t *testing.T) {
 	future.DeliveryID = contracts.DeliveryID(d.Event.EventID, 1, "request.match")
 	if _, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: future, Action: "inspect"}); err == nil {
 		t.Fatal("unscheduled future attempt accepted")
+	}
+	if _, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "unmatched"}); !errors.Is(err, contracts.ErrConflict) {
+		t.Fatalf("incomplete search marked unmatched: %v", err)
+	}
+	for index := 1; index <= len(contracts.SearchRadii); index++ {
+		if _, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "advance", Progress: &contracts.SearchProgress{RadiusIndex: index}}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := s.Workflow(ctx, contracts.WorkflowCommand{Delivery: d, Action: "unmatched"}); err != nil {
 		t.Fatal(err)

@@ -82,6 +82,13 @@ type Request struct {
 	Generation         int64              `json:"generation"`
 	AssignedResourceID string             `json:"assignedResourceId,omitempty"`
 	Assignment         *AssignmentSummary `json:"assignment,omitempty"`
+	Matching           *MatchingSummary   `json:"matching,omitempty"`
+}
+
+type MatchingSummary struct {
+	State        string  `json:"state"`
+	RadiusMeters float64 `json:"radiusMeters"`
+	Reason       string  `json:"reason,omitempty"`
 }
 
 type AssignmentSummary struct {

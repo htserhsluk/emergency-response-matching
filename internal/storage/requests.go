@@ -155,8 +155,36 @@ func scan(row pgx.Row) (contracts.Request, error) {
 }
 func (s *Store) Get(ctx context.Context, id string) (contracts.Request, error) {
 	out, err := scan(s.pool.QueryRow(ctx, selectRequest, id))
-	if err != nil || out.AssignedResourceID == "" {
+	if err != nil {
 		return out, err
+	}
+	var state, reason string
+	var radius int
+	err = s.pool.QueryRow(ctx, `SELECT state,last_error,search_radius FROM processed_events WHERE request_id=$1 AND generation=$2`, id, out.Generation).Scan(&state, &reason, &radius)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return contracts.Request{}, err
+	}
+	if err == nil {
+		label := "SEARCHING"
+		if state == "PAUSED" {
+			label = "PAUSED"
+		} else if out.Status == "UNMATCHED" {
+			label = "EXHAUSTED"
+			if radius < len(contracts.SearchRadii) {
+				label = "LEGACY_UNMATCHED"
+			}
+		} else if out.AssignedResourceID != "" {
+			label = "ASSIGNED"
+		} else if reason == "ASSIGNMENT_STEP_UNCONFIRMED" {
+			label = "RETRYING"
+		}
+		if radius >= len(contracts.SearchRadii) {
+			radius = len(contracts.SearchRadii) - 1
+		}
+		out.Matching = &contracts.MatchingSummary{State: label, RadiusMeters: contracts.SearchRadii[radius], Reason: reason}
+	}
+	if out.AssignedResourceID == "" {
+		return out, nil
 	}
 	var distance float64
 	err = s.pool.QueryRow(ctx, `SELECT distance_meters FROM assignment_attempts WHERE request_id=$1 AND generation=$2 AND phase='FINALIZED'`, id, out.Generation).Scan(&distance)

@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+func TestResourceListStatusFilter(t *testing.T) {
+	for _, status := range []string{"", "UNALLOCATED", "AVAILABLE", "UNAVAILABLE", "ALLOCATED"} {
+		var q ListQuery
+		if err := json.Unmarshal([]byte(`{"limit":2,"status":"`+status+`"}`), &q); err != nil {
+			t.Fatal(err)
+		}
+		if err := q.Validate(); err != nil {
+			t.Fatalf("valid status %q: %v", status, err)
+		}
+	}
+	var q ListQuery
+	if err := json.Unmarshal([]byte(`{"limit":2,"status":"UNKNOWN"}`), &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.Validate() == nil {
+		t.Fatal("unknown resource status filter accepted")
+	}
+}
+
 func TestResourceRequiredFieldsPreserveFalse(t *testing.T) {
 	for _, tc := range []struct {
 		body  string
