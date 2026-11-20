@@ -14,7 +14,7 @@ function resourceHarness(){
 test('resource refresh uses server-side unallocated filter and ignores stale responses',async()=>{
  const h=resourceHarness();
  const first=vm.runInContext('resources()',h.context),second=vm.runInContext('resources()',h.context);
- assert.match(h.waiting[0].path,/status=UNALLOCATED/);
+ assert.match(h.waiting[0].path,/status=UNALLOCATED/);assert.match(h.waiting[0].path,/sort=newest/);
  h.reply(1,'new-result');await second;h.reply(0,'old-result');await first;
  assert.equal(h.elements.get('resource-list').children[0].children[1].textContent,'new-result');
 });

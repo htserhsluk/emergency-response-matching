@@ -37,9 +37,9 @@ Build the Compose application images and the migration image:
 
 ```powershell
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml build api coordinator node-0a matching
-docker build -f infra/Dockerfile.migrate -t erm-migrate:day4 .
-docker build -f infra/Dockerfile --build-arg SERVICE=matching -t erm-matching:day4 .
-minikube -p erm-lab image load erm-api:day4 erm-coordinator:day4 erm-storage-node:day4 erm-migrate:day4 erm-matching:day4
+docker build -f infra/Dockerfile.migrate -t erm-migrate:map-v9 .
+docker build -f infra/Dockerfile --build-arg SERVICE=matching -t erm-matching:map-v9 .
+minikube -p erm-lab image load erm-api:map-v9 erm-coordinator:map-v9 erm-storage-node:map-v9 erm-migrate:map-v9 erm-matching:map-v9
 ./scripts/bootstrap-k8s.ps1 # new namespace/storage only
 ```
 
@@ -79,7 +79,7 @@ Requests require a printable 16–128 character `Idempotency-Key` for mutations.
 - `GET /requests/{id}` → 200.
 - `PUT /requests/{id}/status` → 200: `{"status":"PENDING"}` is an idempotent no-op; COMPLETED requires an existing assignment. Callers cannot force assignment.
 - `POST /resources` → 201: `{"type":"WATER","location":{"latitude":12.97,"longitude":77.59},"availability":true}`. Availability is required; false and zero coordinates are valid.
-- `GET /resources?limit=20&after={id}` → 200, `{items,next}` ordered by ID across all shards. An unavailable shard fails the whole query.
+- `GET /resources?limit=20` → 200, with items ordered by ID across all shards. Add `sort=newest` for registration order and optional `type` or `status` filters. Pass the returned `next` as `after` with the same options. An unavailable shard fails the whole query.
 - `PUT /resources/{id}/status` → 200: `{"status":"AVAILABLE"}` or UNAVAILABLE. Public calls cannot allocate or release allocated resources.
 - `POST /match/{requestId}` → 200 with scheduled/current state. Pending/assigned requests are not falsely reported as completed; unmatched requests can schedule a new generation.
 
@@ -89,7 +89,9 @@ Reference PDFs, the private handover, local credentials and execution checkpoint
 
 ## Matching and retry behaviour
 
-Matching searches by resource type from zero distance through progressively larger radii up to global coverage, ordered by observed geographical distance and stable ID. Search progress is durably checkpointed between bounded attempts. Every required shard must answer. The coordinator validates the candidate using PostGIS before reservation and serializes request mutations with a fixed set of 256 cancellable locks.
+Matching searches by resource type from zero distance through progressively larger radii up to and including 4,000 km, ordered by observed geographical distance and stable ID. Search progress is durably checkpointed between bounded attempts. Every required shard must answer. The coordinator validates the candidate using PostGIS before reservation and serializes request mutations with a fixed set of 256 cancellable locks.
+
+Registering an available resource or marking one AVAILABLE automatically reopens eligible unmatched requests. The coordinator probes durable unmatched rows in batches. A successful probe starts a new generation at zero.
 
 An intent is durable before reservation. Reservation atomically records success or definite rejection with resource allocation. Unknown outcomes retain the original assignment/resource IDs; reconciliation repeats the same attempt. Only a confirmed rejection permits another candidate. Finalization atomically records ASSIGNED and event completion. Public completion never releases the resource.
 
@@ -103,7 +105,7 @@ Worker readiness now requires an active consumer session; liveness remains proce
 
 Open `http://localhost:8080` for Compose. For Kubernetes, run `kubectl --context erm-lab -n erm port-forward service/api 18080:8080`, then open `http://localhost:18080`. The API serves the page and its versioned map library; no frontend build or extra service is required.
 
-Register assistance, submit a request, look up its ID, inspect the saved assignment and mark it completed. The resource directory allows AVAILABLE/UNAVAILABLE transitions while allocated resources remain protected. The inbox belongs to the selected request and the shared `demo` recipient; it is not a private user account. Its read state survives refresh and service/database recovery.
+Filter saved locations by assistance type, select a resource to see up to five nearby eligible requests and its confirmed match, browse newest-first resource registrations, submit a request, look up its ID, inspect the saved assignment and mark it completed. The resource directory allows AVAILABLE/UNAVAILABLE transitions while allocated resources remain protected. The inbox belongs to the selected request and the shared `demo` recipient; it is not a private user account. Its read state survives refresh and service/database recovery.
 
 Map background tiles are optional. Use `?tiles=off` for the tile-free coordinate/marker workflow. See [browser documentation](docs/browser.md) for configuration, attribution and fallback limits. See [inbox API](docs/inbox-api.md) for the two additional endpoints; the original seven APIs are unchanged.
 

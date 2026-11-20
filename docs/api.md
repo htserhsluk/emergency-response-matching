@@ -8,7 +8,7 @@ JSON requests/responses use `Content-Type: application/json`. Mutation requests 
 | `GET /requests/{id}` | 200 | Request fields and current status, plus saved assignment summary when present |
 | `PUT /requests/{id}/status` | 200 | `{"status":"COMPLETED"}` after assignment; current-state no-op allowed, public assignment bypass forbidden |
 | `POST /resources` | 201 | `{"type":"WATER","location":{"latitude":12.9,"longitude":77.6},"availability":true}` |
-| `GET /resources` | 200 | `{items,next}`; optional `limit`/`after`, deterministic cross-shard ID order; no partial successful listing |
+| `GET /resources` | 200 | `{items,next}`; filtered pages across all shards, ascending ID by default or newest registration with `sort=newest` |
 | `PUT /resources/{id}/status` | 200 | `{"status":"AVAILABLE"}` or `UNAVAILABLE` for unallocated resources; no public allocation/release bypass |
 | `POST /match/{requestId}` | 200 | `{}`; schedules eligible unmatched work or returns current state, never promises immediate assignment |
 
@@ -28,10 +28,16 @@ Typed `/internal/data/request:{id}` and `resource:{id}` provide safe CRUD; delet
 
 `/health/live` checks process health. `/health/ready` represents service-specific dependencies; Kubernetes API traffic intentionally uses process serving readiness to retain partial-shard availability. Keep management/DB ports local and secrets outside source control.
 
-## Optional resource views and matching progress
+## Resource views, map and matching progress
 
-`GET /resources` without filters retains the original all-status, ascending-ID result and `{items,next}` cursor. Optional `status` accepts `UNALLOCATED` (AVAILABLE and UNAVAILABLE), `AVAILABLE`, `UNAVAILABLE`, or `ALLOCATED`; unknown values return400. Filtering occurs before each shard limit, then all shard results are merged in ID order. Reuse `next` only with the same filter; changing a filter starts with an empty `after`. This is live keyset pagination, not a snapshot: concurrent status changes may move records between views. Refresh starts at the first page. An extra terminal empty page remains possible under the compatible cursor contract.
+`GET /resources` accepts optional `status`, `type`, `sort`, `limit` and `after`. Status accepts UNALLOCATED (AVAILABLE and UNAVAILABLE), AVAILABLE, UNAVAILABLE or ALLOCATED. Type accepts the five assistance types above. Omitting sort yields the original ascending-ID ordering. Use `sort=newest` for descending registration time and descending ID. Historical registrations with unknown times follow dated records. Each shard filters before applying its limit. Pass the returned `next` as `after` with the same filters and sort. Restart pagination after changing filters. Concurrent changes can move records between pages.
 
-`GET /resources/{id}` is an additive public lookup returning the resource including its saved `assignedRequestId`, or404. It supports the recently registered resource card independently of list ordering. No required endpoint was removed.
+`GET /resources/{id}` returns the saved resource, its registration time when known, and its assigned request ID when allocated.
 
-`GET /requests/{id}` may include `matching: {state,radiusMeters,reason?}`. States distinguish SEARCHING, RETRYING (uncertain/dependency processing), PAUSED, EXHAUSTED (complete current global search), ASSIGNED and LEGACY_UNMATCHED (historical limited search). A newly queued request may not yet have a matching summary. Public request status vocabulary remains unchanged. Retry a historical UNMATCHED request to start a new global generation; existing allocations and uncertain reservations are never reset.
+`GET /map/locations?type=WATER` returns pages of up to 100 saved request and resource locations for the specified type, with kind, ID, location and status. Supply the returned `next` as `after` to continue.
+
+`GET /resources/{id}/candidates` returns `items` with up to five eligible requests ranked by geographic distance and ID. Each item has an ID, location and distance in metres. Candidates must be within 4,000 km and have the same assistance type. Paused requests and requests with active reservations or assignment intents are excluded. Once the resource has an owner, `items` is empty. The `assignedRequest` field appears after the request shard confirms finalization and includes the saved assignment distance.
+
+`GET /requests/{id}` may include `matching: {state,radiusMeters,reason?}`. SEARCHING, RETRYING and PAUSED describe active work or its recovery state. EXHAUSTED means the search completed through the current 4,000 km cap. LEGACY_UNMATCHED identifies a historical limited search. ASSIGNED indicates a saved allocation. A newly queued request may have no summary yet.
+
+The coordinator automatically schedules a new generation when an unmatched request has available same-type supply within 4,000 km. Registration and availability updates are sufficient to trigger subsequent matching through reconciliation. Each new generation begins at zero. The manual match endpoint remains available.

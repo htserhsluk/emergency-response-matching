@@ -28,7 +28,7 @@ function displayRequest(r){
  if(resourceLoaded&&r.assignedResourceId&&previousAssignment!==r.assignedResourceId)resources();
  const box=$('request-result');box.replaceChildren(el('span',r.status,'badge'),el('p',`Request ${r.id}`),el('p',`${r.type} • ${r.location.latitude}, ${r.location.longitude}`),el('p',r.details));
  if(r.matching){
-  const labels={SEARCHING:'Search in progress',RETRYING:'Waiting to confirm processing; retry is scheduled',LEGACY_UNMATCHED:'No resource found under the previous 10 km policy; retry to search globally',PAUSED:'Processing paused after repeated failures; operator attention is needed',EXHAUSTED:'Complete geographic search found no eligible resource',ASSIGNED:'Allocation saved'};
+  const labels={SEARCHING:'Search in progress',RETRYING:'Waiting to confirm processing; retry is scheduled',LEGACY_UNMATCHED:'No resource found under the previous 10 km policy; automatic matching can search up to 4,000 km',PAUSED:'Processing paused after repeated failures; operator attention is needed',EXHAUSTED:'No eligible resource found within 4,000 km. Matching resumes when assistance becomes available',ASSIGNED:'Allocation saved'};
   box.append(el('p',(labels[r.matching.state]||r.matching.state)+` · Current search radius: ${(r.matching.radiusMeters/1000).toLocaleString()} km`));
  }
  if(r.assignedResourceId)box.append(el('p',`Assigned resource: ${r.assignedResourceId}`));
@@ -38,8 +38,8 @@ function displayRequest(r){
 }
 async function refresh(generation=followGeneration){if(!selected)return;const id=selected,sequence=++requestRefresh;const r=await api('/requests/'+id);if(selected===id&&generation===followGeneration&&sequence===requestRefresh){displayRequest(r);await notifications(id,'',generation);}return r;}
 function follow(id){const generation=++followGeneration;selected=id;lastRequest=null;if(typeof clearMappedRequest==='function')clearMappedRequest();$('request-id').value=id;$('request-result').textContent='Loading saved status…';$('inbox-list').textContent='Loading inbox…';$('match').disabled=true;$('complete').disabled=true;clearTimeout(timer);const poll=async()=>{let delay=3000;try{await refresh(generation);}catch(e){if(generation===followGeneration)message('Status or inbox refresh failed: '+e.message,true);delay=10000;}if(generation===followGeneration)timer=setTimeout(poll,delay);};poll();}
-$('request').onclick=()=>action($('request'),async()=>{if(!$('details').value.trim())throw new Error('Describe the request before submitting.');const r=await api('/requests','POST',{type:$('type').value,location:locationInput(),details:$('details').value});follow(r.id);message('Request saved. Matching is pending; watch its status below.');});
-$('resource').onclick=()=>action($('resource'),async()=>{const r=await api('/resources','POST',{type:$('type').value,location:locationInput(),availability:true});message('Available resource registered: '+r.id);showCreatedResource(r);await resources();});
+$('request').onclick=()=>action($('request'),async()=>{if(!$('details').value.trim())throw new Error('Describe the request before submitting.');const r=await api('/requests','POST',{type:$('type').value,location:locationInput(),details:$('details').value});if(typeof clearInspection==='function'&&detailLayer){clearInspection();refreshLocations();}follow(r.id);message('Request saved. Matching starts automatically. Follow the saved status below.');});
+$('resource').onclick=()=>action($('resource'),async()=>{const r=await api('/resources','POST',{type:$('type').value,location:locationInput(),availability:true});message('Available resource registered: '+r.id);showCreatedResource(r);if(typeof inspectRecord==='function'&&recordsLayer&&r.type===type.value){inspectRecord({...r,kind:'resource'});refreshLocations();}await resources();});
 $('lookup').onsubmit=e=>{e.preventDefault();follow($('request-id').value.trim());};
 $('match').onclick=()=>action($('match'),async()=>{if(!selected)throw new Error('Look up a request first.');await api('/match/'+selected,'POST',{});message('Matching scheduled. The saved status will update asynchronously.');await refresh();});
 $('complete').onclick=()=>action($('complete'),async()=>{if(!selected)throw new Error('Look up a request first.');await api('/requests/'+selected+'/status','PUT',{status:'COMPLETED'});message('Request marked completed.');await refresh();});
@@ -52,13 +52,13 @@ function resourceRow(r){
  }
  return row;
 }
-function showCreatedResource(r){createdResource=r;$('created-resource').replaceChildren(el('h3','Recently registered resource'),resourceRow(r));}
+function showCreatedResource(r){++createdRefresh;createdResource=r;$('created-resource').replaceChildren(el('h3','Recently registered resource'),resourceRow(r));}
 async function refreshCreatedResource(){if(!createdResource)return;const id=createdResource.id,sequence=++createdRefresh;try{const r=await api('/resources/'+id);if(sequence===createdRefresh&&createdResource.id===id)showCreatedResource(r);}catch(e){if(sequence===createdRefresh)$('created-resource').replaceChildren(el('h3','Recently registered resource'),el('p',id),el('p','Current status unavailable. Refresh to retry.'));}}
 async function resources(after=''){
  const generation=++resourceGeneration,filter=resourceFilter,feedback=$('resource-feedback');
  refreshCreatedResource();feedback.textContent='Loading resources…';$('more-resources').disabled=true;
  try{
-  const page=await api('/resources?limit=20&after='+encodeURIComponent(after)+'&status='+encodeURIComponent(filter));
+  const page=await api('/resources?sort=newest&limit=20&after='+encodeURIComponent(after)+'&status='+encodeURIComponent(filter));
   if(generation!==resourceGeneration)return;
   const fingerprint=JSON.stringify({filter,after,page}),unchanged=fingerprint===resourceFingerprint;
   const box=$('resource-list');box.replaceChildren();
@@ -66,7 +66,7 @@ async function resources(after=''){
   if(!page.items.length)box.append(el('p','No resources in this view. Try another filter or register assistance.'));
   nextResource=page.next||'';$('more-resources').hidden=!nextResource;
   resourceFingerprint=fingerprint;resourceLoaded=true;
-  feedback.textContent=unchanged?'Refresh complete — results unchanged.':`Loaded ${page.items.length} resources. Sorted by ID, not registration time.`;
+  feedback.textContent=unchanged?'Refresh complete — results unchanged.':`Loaded ${page.items.length} resources. Newest registrations first.`;
  }catch(e){if(generation===resourceGeneration){feedback.textContent='Refresh failed. Previous results may be out of date. '+e.message;} }
  finally{if(generation===resourceGeneration)$('more-resources').disabled=false;}
 }
