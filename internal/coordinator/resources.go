@@ -73,20 +73,35 @@ func (r *Router) ListResources(ctx context.Context, q contracts.ListQuery) (cont
 	if q.Validate() != nil {
 		return contracts.ResourcePage{}, contracts.ErrInvalid
 	}
-	items, err := fanout(ctx, r, func(ctx context.Context, n *httpapp.Client) ([]contracts.Resource, error) {
+	pages, err := fanout(ctx, r, func(ctx context.Context, n *httpapp.Client) ([]contracts.ResourcePage, error) {
 		p, e := n.ListResources(ctx, q)
-		return p.Items, e
+		return []contracts.ResourcePage{p}, e
 	})
 	if err != nil {
 		return contracts.ResourcePage{}, err
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	items := []contracts.Resource{}
+	hasMore := false
+	for _, page := range pages {
+		items = append(items, page.Items...)
+		hasMore = hasMore || page.Next != ""
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if q.Sort == "newest" {
+			if items[i].RegisteredAt.Equal(items[j].RegisteredAt) {
+				return items[i].ID > items[j].ID
+			}
+			return items[i].RegisteredAt.After(items[j].RegisteredAt)
+		}
+		return items[i].ID < items[j].ID
+	})
 	if len(items) > q.Limit {
+		hasMore = true
 		items = items[:q.Limit]
 	}
 	out := contracts.ResourcePage{Items: items}
-	if len(items) > 0 {
-		out.Next = items[len(items)-1].ID
+	if hasMore && len(items) > 0 {
+		out.Next = q.CursorFor(items[len(items)-1])
 	}
 	return out, nil
 }

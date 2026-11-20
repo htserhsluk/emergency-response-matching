@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -21,6 +22,50 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestNewestMatchingResourcesAcrossShards(t *testing.T) {
+	const secret = "resource-directory-integration-secret"
+	var urls [3]string
+	ctx := context.Background()
+	for shard := range 3 {
+		s, pool := resourceFixture(t)
+		server := httptest.NewServer(httpapp.NewServer(s, secret, true))
+		t.Cleanup(server.Close)
+		urls[shard] = server.URL
+		for _, row := range []struct{ digit, kind, day string }{
+			{fmt.Sprint(shard + 1), "WATER", "2026-01-02"},
+			{fmt.Sprint(shard + 4), "WATER", []string{"2026-01-05", "2026-01-03", "2026-01-04"}[shard]},
+			{fmt.Sprint(shard + 7), "FOOD", "2026-01-09"},
+		} {
+			_, err := pool.Exec(ctx, `INSERT INTO resources(id,type,location,availability,status,registered_at) VALUES($1,$2,ST_SetSRID(ST_MakePoint(1,1),4326)::geography,true,'AVAILABLE',$3::text::timestamptz)`, strings.Repeat(row.digit, 32), row.kind, row.day)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	router := coordinator.NewRouter(urls, secret)
+	api := httptest.NewServer(httpapp.NewServer(router, "", false))
+	defer api.Close()
+	client := httpapp.NewPublicClient(api.URL)
+	q := contracts.ListQuery{Limit: 2, Sort: "newest", Type: "WATER"}
+	var got string
+	for page := 0; page < 5; page++ {
+		out, err := client.ListResources(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range out.Items {
+			got += item.ID[:1]
+		}
+		if out.Next == "" {
+			break
+		}
+		q.After = out.Next
+	}
+	if got != "465321" {
+		t.Fatalf("paged water resources: got %q", got)
+	}
+}
 
 func TestFilteredResourcePagesAcrossShards(t *testing.T) {
 	const secret = "filtered-resource-secret-32-chars"
@@ -85,6 +130,10 @@ func TestFilteredResourcePagesAcrossShards(t *testing.T) {
 // Each resource test owns a schema, so spatial/list assertions cannot see prior runs.
 func resourceFixture(t *testing.T) (*storage.Store, *pgxpool.Pool) {
 	t.Helper()
+	return resourceFixtureThrough(t, "99999")
+}
+func resourceFixtureThrough(t *testing.T, version string) (*storage.Store, *pgxpool.Pool) {
+	t.Helper()
 	_, admin := fixture(t)
 	ctx := context.Background()
 	schema := fmt.Sprintf("fixture_%d", time.Now().UnixNano())
@@ -109,8 +158,15 @@ func resourceFixture(t *testing.T) (*storage.Store, *pgxpool.Pool) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, file := range []string{"00001_core.sql", "00002_resources.sql", "00003_assignment.sql", "00004_delivery.sql", "00005_workflow.sql", "00006_notifications.sql", "00007_search_progress.sql"} {
-		b, err := os.ReadFile("../../migrations/" + file)
+	files, err := filepath.Glob("../../migrations/*.sql")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("migrations: %v", err)
+	}
+	for _, file := range files {
+		if filepath.Base(file)[:5] > version {
+			break
+		}
+		b, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}

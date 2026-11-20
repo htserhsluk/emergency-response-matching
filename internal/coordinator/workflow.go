@@ -95,7 +95,7 @@ func (r *Router) assign(ctx context.Context, n *httpapp.Client, d contracts.Deli
 		if err := r.validateCandidate(ctx, state.Request, intent.IntentCommand); err != nil {
 			return contracts.WorkflowState{}, err
 		}
-		result, err := r.reserveResource(ctx, contracts.ReserveCommand{AssignmentID: intent.AssignmentID, RequestID: intent.RequestID, ResourceID: intent.ResourceID})
+		result, err := r.reserveResource(ctx, contracts.ReserveCommand{AssignmentID: intent.AssignmentID, RequestID: intent.RequestID, ResourceID: intent.ResourceID}, intent.DistanceMeters > contracts.MaxMatchDistanceMeters)
 		if err != nil {
 			return contracts.WorkflowState{}, err
 		}
@@ -176,7 +176,7 @@ func (r *Router) validateCandidate(ctx context.Context, request contracts.Reques
 	if err != nil {
 		return err
 	}
-	if candidate.ResourceID != intent.ResourceID || candidate.DistanceMeters > contracts.SearchRadii[len(contracts.SearchRadii)-1] || math.Abs(candidate.DistanceMeters-intent.DistanceMeters) > 0.000001 {
+	if candidate.ResourceID != intent.ResourceID || (candidate.DistanceMeters > contracts.MaxMatchDistanceMeters) != (intent.DistanceMeters > contracts.MaxMatchDistanceMeters) || math.Abs(candidate.DistanceMeters-intent.DistanceMeters) > 0.000001 {
 		return contracts.ErrInvalid
 	}
 	return nil
@@ -192,7 +192,46 @@ func (r *Router) ReconcileOnce(ctx context.Context) error {
 			first = err
 		}
 	}
+	checks, err := fanout(ctx, r, func(ctx context.Context, n *httpapp.Client) ([]contracts.Request, error) {
+		return n.UnmatchedChecks(ctx)
+	})
+	if err != nil {
+		return err
+	}
+	probed := make(map[string]bool)
+	for _, request := range checks {
+		candidates, err := r.Search(ctx, contracts.SearchQuery{Type: request.Type, Location: request.Location, RadiusMeters: contracts.MaxMatchDistanceMeters, Limit: 1})
+		if err == nil && len(candidates) > 0 {
+			resourceID := candidates[0].ResourceID
+			if !probed[resourceID] {
+				probed[resourceID] = true
+				err = r.wakeNearest(ctx, resourceID)
+			}
+		}
+		if err != nil && first == nil {
+			first = err
+		}
+	}
 	return first
+}
+
+// The rotation discovers available supply. Choose the closest eligible request
+// across all shards, including requests beyond this pass's rotation batch.
+func (r *Router) wakeNearest(ctx context.Context, resourceID string) error {
+	preview, err := r.RequestCandidates(ctx, resourceID)
+	if err != nil || len(preview.Items) == 0 {
+		return err
+	}
+	n, err := r.node(preview.Items[0].ID)
+	if err != nil {
+		return err
+	}
+	request, err := n.Get(ctx, preview.Items[0].ID)
+	if err != nil || request.Status != "UNMATCHED" {
+		return err
+	}
+	_, err = n.WakeMatch(ctx, request.ID, request.Generation)
+	return err
 }
 func (r *Router) RunReconciler(ctx context.Context) {
 	timer := time.NewTicker(2 * time.Second)

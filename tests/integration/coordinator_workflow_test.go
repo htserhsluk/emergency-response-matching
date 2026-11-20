@@ -16,6 +16,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -226,15 +228,15 @@ func TestMatchingExpandsRadiusAndRejectsWrongType(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, err = l.router.HandleDelivery(ctx, second)
-	if err != nil || state.Request.AssignedResourceID != distant.ID {
-		t.Fatalf("distant resource not matched %+v %v", state, err)
+	if err != nil || state.Request.Status != "UNMATCHED" || state.Request.AssignedResourceID != "" {
+		t.Fatalf("resource %s outside 4,000 km was eligible: %+v %v", distant.ID, state, err)
 	}
 }
 func (l *workflowLab) restart() {
 	l.router = coordinator.NewRouter(l.urls, "workflow-secret-at-least-32-characters")
 }
 
-func TestGlobalSearchExhaustionAndNewGeneration(t *testing.T) {
+func TestAutomaticMatchAfterRegistrationAndRestart(t *testing.T) {
 	l := newWorkflowLab(t)
 	ctx := context.Background()
 	r, d := l.request(t, 0, "global-empty")
@@ -242,12 +244,16 @@ func TestGlobalSearchExhaustionAndNewGeneration(t *testing.T) {
 	if err != nil || state.Request.Status != "UNMATCHED" || state.Progress.RadiusIndex != len(contracts.SearchRadii) {
 		t.Fatal("incomplete global exhaustion", state, err)
 	}
-	// A resource near the antipode must be covered by the final radius.
-	supply, err := l.router.RegisterResource(ctx, keyOnShard("register-resource", 2, "antipodal"), resourceBody(0, 179.99, true))
+	// New supply wakes exhausted work even after the coordinator restarts.
+	supply, err := l.router.RegisterResource(ctx, keyOnShard("register-resource", 2, "new-supply"), resourceBody(0, 0, true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := l.router.ScheduleMatch(ctx, r.ID, "restart-global-search-0001")
+	l.restart()
+	if err := l.router.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	next, err := l.router.Get(ctx, r.ID)
 	if err != nil || next.Generation != 2 {
 		t.Fatal(next, err)
 	}
@@ -265,7 +271,7 @@ func TestGlobalSearchExhaustionAndNewGeneration(t *testing.T) {
 	}
 	state, err = l.router.HandleDelivery(ctx, d)
 	if err != nil || state.Request.AssignedResourceID != supply.ID {
-		t.Fatal("antipodal resource omitted", state, err)
+		t.Fatal("new resource omitted", state, err)
 	}
 }
 func keyOnShard(kind string, shard int, tag string) string {
@@ -481,5 +487,177 @@ func TestPausedWorkflowStopsReconciliationAndRedriveResumesOriginalIntent(t *tes
 	got, err = l.router.Get(context.Background(), request.ID)
 	if err != nil || got.Status != "ASSIGNED" || got.AssignedResourceID != resource.ID {
 		t.Fatal(got, err)
+	}
+}
+
+func TestAutomaticMatchAfterAvailabilityTransition(t *testing.T) {
+	l := newWorkflowLab(t)
+	ctx := context.Background()
+	r, d := l.request(t, 1, "availability-request")
+	supply, err := l.router.RegisterResource(ctx, keyOnShard("register-resource", 2, "available-later"), resourceBody(0, 1, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := l.router.HandleDelivery(ctx, d)
+	if err != nil || state.Request.Status != "UNMATCHED" {
+		t.Fatal(state, err)
+	}
+	if _, err = l.router.SetResourceStatus(ctx, supply.ID, "available-again-00001", "AVAILABLE"); err != nil {
+		t.Fatal(err)
+	}
+	if err = l.router.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var payload []byte
+	if err = l.pools[1].QueryRow(ctx, `SELECT payload,delivery_id FROM outbox_events WHERE request_id=$1 AND generation=2 AND retry_number=0`, r.ID).Scan(&payload, &d.DeliveryID); err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(payload, &d.Event); err != nil {
+		t.Fatal(err)
+	}
+	state, err = l.router.HandleDelivery(ctx, d)
+	if err != nil || state.Request.AssignedResourceID != supply.ID {
+		t.Fatal(state, err)
+	}
+}
+func TestLegacyIntentAtDistanceBeyondCap(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reservation-committed-%v", committed), func(t *testing.T) {
+			l := newWorkflowLab(t)
+			ctx := context.Background()
+			r, d := l.request(t, 0, "legacy-owner")
+			supply, err := l.router.RegisterResource(ctx, keyOnShard("register-resource", 2, "legacy-far"), resourceBody(0, 50, true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := l.stores[2].CheckCandidate(ctx, contracts.CandidateQuery{ResourceID: supply.ID, Type: r.Type, Location: r.Location})
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent := contracts.IntentCommand{AssignmentID: contracts.EntityID("assignment", d.Event.EventID+":"+supply.ID), RequestID: r.ID, ResourceID: supply.ID, Generation: 1, DistanceMeters: candidate.DistanceMeters}
+			if _, err = l.router.BeginIntent(ctx, intent); !errors.Is(err, contracts.ErrInvalid) {
+				t.Fatalf("new far intent: %v", err)
+			}
+			if _, err = l.pools[0].Exec(ctx, `INSERT INTO assignment_attempts(assignment_id,request_id,resource_id,generation,distance_meters,payload_hash,phase) VALUES($1,$2,$3,1,$4,$5,'INTENT')`, intent.AssignmentID, r.ID, supply.ID, candidate.DistanceMeters, contracts.PayloadHash(intent)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = l.pools[0].Exec(ctx, `UPDATE requests SET status='ASSIGNING' WHERE id=$1`, r.ID); err != nil {
+				t.Fatal(err)
+			}
+			cmd := contracts.ReserveCommand{AssignmentID: intent.AssignmentID, RequestID: r.ID, ResourceID: supply.ID}
+			if committed {
+				if _, err = l.stores[2].Reserve(ctx, cmd); err != nil {
+					t.Fatal(err)
+				}
+			}
+			state, err := l.router.HandleDelivery(ctx, d)
+			if err != nil || !state.Ack {
+				t.Fatal(state, err)
+			}
+			replay, err := l.stores[2].Reserve(ctx, cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if committed {
+				if state.Request.AssignedResourceID != supply.ID || replay.Status != "SUCCEEDED" {
+					t.Fatal(state, replay)
+				}
+			} else if state.Request.Status != "UNMATCHED" || replay.Status != "REJECTED" {
+				t.Fatal(state, replay)
+			}
+		})
+	}
+}
+
+func TestSchemaSevenSearchProgressUpgrade(t *testing.T) {
+	s, p := resourceFixtureThrough(t, "00007")
+	ctx := context.Background()
+	type cursor struct {
+		band     int
+		distance float64
+	}
+	cases := []struct{ old, want cursor }{
+		{cursor{10, 2_000_000}, cursor{10, 2_000_000}},
+		{cursor{11, 4_000_000}, cursor{11, 4_000_000}},
+		{cursor{11, 4_000_001}, cursor{12, 0}},
+		{cursor{12, 6_000_000}, cursor{12, 0}},
+		{cursor{14, 0}, cursor{12, 0}},
+	}
+	for i, c := range cases {
+		r, err := s.Create(ctx, fmt.Sprintf("legacy-progress-test-%d", i), body())
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := ""
+		if c.old.distance > 0 {
+			id = r.ID
+		}
+		if _, err = p.Exec(ctx, `INSERT INTO processed_events(event_id,request_id,generation,state,search_radius,search_after_id,search_after_distance) VALUES($1,$2,1,'RUNNING',$3,$4,$5)`, fmt.Sprint(i), r.ID, c.old.band, id, c.old.distance); err != nil {
+			t.Fatal(err)
+		}
+	}
+	migration, err := os.ReadFile("../../migrations/00009_matching_cap.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = p.Exec(ctx, strings.Split(string(migration), "-- +goose Down")[0]); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range cases {
+		var got cursor
+		var id string
+		if err = p.QueryRow(ctx, `SELECT search_radius,search_after_distance,search_after_id FROM processed_events WHERE event_id=$1`, fmt.Sprint(i)).Scan(&got.band, &got.distance, &id); err != nil {
+			t.Fatal(err)
+		}
+		if got != c.want || (id == "") != (c.want.distance == 0) {
+			t.Errorf("old=%+v got=%+v id=%q", c.old, got, id)
+		}
+	}
+}
+func TestAutomaticMatchPrioritizesNearestWaitingRequest(t *testing.T) {
+	l := newWorkflowLab(t)
+	ctx := context.Background()
+	waiting := make([]contracts.Request, 0, 6)
+	for i := range 6 {
+		c := body()
+		*c.Location.Longitude = float64(6 - i)
+		r, err := l.router.Create(ctx, keyOnShard("create-request", 0, fmt.Sprintf("waiting-%d", i)), c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Seed six already-exhausted requests. The nearest is outside the first
+		// four requests selected by the durable availability scan.
+		if _, err = l.pools[0].Exec(ctx, `UPDATE requests SET status='UNMATCHED',availability_checked_at=to_timestamp($2) WHERE id=$1`, r.ID, float64(i+1)); err != nil {
+			t.Fatal(err)
+		}
+		waiting = append(waiting, r)
+	}
+	supply := l.resource(t, 2, "one-new-unit")
+	if err := l.router.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range waiting {
+		got, err := l.router.Get(ctx, r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i < 5 && got.Status != "UNMATCHED" {
+			t.Fatalf("farther request scheduled: %+v", got)
+		}
+		if i == 5 && (got.Status != "PENDING" || got.Generation != 2) {
+			t.Fatalf("nearest request skipped: %+v", got)
+		}
+	}
+	var payload []byte
+	var d contracts.Delivery
+	if err := l.pools[0].QueryRow(ctx, `SELECT payload,delivery_id,destination FROM outbox_events WHERE request_id=$1 AND generation=2`, waiting[5].ID).Scan(&payload, &d.DeliveryID, &d.Destination); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(payload, &d.Event); err != nil {
+		t.Fatal(err)
+	}
+	state, err := l.router.HandleDelivery(ctx, d)
+	if err != nil || state.Request.AssignedResourceID != supply.ID {
+		t.Fatal(state, err)
 	}
 }

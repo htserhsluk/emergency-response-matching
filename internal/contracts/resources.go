@@ -3,6 +3,8 @@ package contracts
 import (
 	"github.com/htserhsluk/emergency-response-matching/internal/routing"
 	"math"
+	"strings"
+	"time"
 )
 
 type RegisterResource struct {
@@ -19,6 +21,7 @@ func (c RegisterResource) Validate() error {
 }
 
 type Resource struct {
+	RegisteredAt      time.Time `json:"registeredAt,omitzero"`
 	ID                string    `json:"id"`
 	Type              string    `json:"type"`
 	Location          *Location `json:"location"`
@@ -27,12 +30,17 @@ type Resource struct {
 	AssignedRequestID string    `json:"assignedRequestId,omitempty"`
 }
 type ListQuery struct {
+	Sort   string `json:"sort,omitempty"`
+	Type   string `json:"type,omitempty"`
 	Limit  int    `json:"limit"`
 	After  string `json:"after,omitempty"`
 	Status string `json:"status,omitempty"`
 }
 
 func (q ListQuery) Validate() error {
+	if q.Sort != "" && q.Sort != "newest" || q.Type != "" && !validType(q.Type) {
+		return ErrInvalid
+	}
 	switch q.Status {
 	case "", "UNALLOCATED", "AVAILABLE", "UNAVAILABLE", "ALLOCATED":
 	default:
@@ -42,11 +50,31 @@ func (q ListQuery) Validate() error {
 		return ErrInvalid
 	}
 	if q.After != "" {
+		if q.Sort == "newest" {
+			_, _, err := q.NewestCursor()
+			return err
+		}
 		if _, err := routing.ShardFor(q.After); err != nil {
 			return ErrInvalid
 		}
 	}
 	return nil
+}
+
+func (q ListQuery) NewestCursor() (time.Time, string, error) {
+	stamp, id, ok := strings.Cut(q.After, "/")
+	registered, err := time.Parse(time.RFC3339Nano, stamp)
+	if _, idErr := routing.ShardFor(id); !ok || err != nil || idErr != nil || registered.Nanosecond()%1000 != 0 {
+		return time.Time{}, "", ErrInvalid
+	}
+	return registered, id, nil
+}
+
+func (q ListQuery) CursorFor(r Resource) string {
+	if q.Sort == "newest" {
+		return r.RegisteredAt.UTC().Format(time.RFC3339Nano) + "/" + r.ID
+	}
+	return r.ID
 }
 
 type ResourcePage struct {
@@ -67,7 +95,7 @@ type SearchQuery struct {
 }
 
 func (q SearchQuery) Validate() error {
-	if (CreateRequest{Type: q.Type, Location: q.Location, Details: "search"}).Validate() != nil || math.IsNaN(q.RadiusMeters) || math.IsInf(q.RadiusMeters, 0) || q.RadiusMeters < 0 || q.RadiusMeters > 20100000 || math.IsNaN(q.AfterDistance) || math.IsInf(q.AfterDistance, 0) || q.AfterDistance < 0 {
+	if (CreateRequest{Type: q.Type, Location: q.Location, Details: "search"}).Validate() != nil || math.IsNaN(q.RadiusMeters) || math.IsInf(q.RadiusMeters, 0) || q.RadiusMeters < 0 || q.RadiusMeters > MaxMatchDistanceMeters || math.IsNaN(q.AfterDistance) || math.IsInf(q.AfterDistance, 0) || q.AfterDistance < 0 {
 		return ErrInvalid
 	}
 	if q.AfterID == "" && q.AfterDistance != 0 {

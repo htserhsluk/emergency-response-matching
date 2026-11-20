@@ -291,3 +291,26 @@ func (s *Store) PendingWork(ctx context.Context) ([]contracts.Delivery, error) {
 	}
 	return out, rows.Err()
 }
+
+// Rotate through durable unmatched requests. A lost scan or a resource arriving
+// after a scan is repaired on a subsequent pass. Probes never consume a generation.
+func (s *Store) UnmatchedChecks(ctx context.Context) ([]contracts.Request, error) {
+	rows, err := s.pool.Query(ctx, `WITH batch AS (
+		SELECT id FROM requests WHERE status='UNMATCHED'
+		ORDER BY coalesce(availability_checked_at,created_at),id LIMIT 4 FOR UPDATE SKIP LOCKED
+	) UPDATE requests r SET availability_checked_at=clock_timestamp() FROM batch
+	WHERE r.id=batch.id RETURNING r.id,r.type,ST_Y(r.location::geometry),ST_X(r.location::geometry),r.details,r.status,r.created_at,r.generation,coalesce(r.assigned_resource_id,'')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []contracts.Request{}
+	for rows.Next() {
+		req, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, req)
+	}
+	return out, rows.Err()
+}

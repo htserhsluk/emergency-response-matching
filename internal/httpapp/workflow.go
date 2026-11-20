@@ -20,6 +20,11 @@ type IntentConfirmer interface {
 	IntentForReservation(context.Context, contracts.ReserveCommand) (contracts.Intent, error)
 }
 
+type wakeCommand struct {
+	RequestID  string `json:"requestId"`
+	Generation int64  `json:"generation"`
+}
+
 func serveWorkflow(w http.ResponseWriter, r *http.Request, s Requests, action string) {
 	if r.Method != "POST" {
 		write(w, 405, contracts.Error{Code: "METHOD_NOT_ALLOWED", Message: "Method not allowed"})
@@ -28,6 +33,41 @@ func serveWorkflow(w http.ResponseWriter, r *http.Request, s Requests, action st
 	var out any
 	var err error
 	switch action {
+	case "settle-reservation":
+		var c contracts.ReserveCommand
+		if !decode(w, r, &c) {
+			return
+		}
+		m, ok := s.(interface {
+			SettleReservation(context.Context, contracts.ReserveCommand) (contracts.ReservationResult, error)
+		})
+		if !ok {
+			fail(w, contracts.ErrUnavailable, "")
+			return
+		}
+		out, err = m.SettleReservation(r.Context(), c)
+	case "wake-match":
+		var c wakeCommand
+		if !decode(w, r, &c) {
+			return
+		}
+		m, ok := s.(interface {
+			WakeMatch(context.Context, string, int64) (contracts.Request, error)
+		})
+		if !ok {
+			fail(w, contracts.ErrUnavailable, "")
+			return
+		}
+		out, err = m.WakeMatch(r.Context(), c.RequestID, c.Generation)
+	case "unmatched-checks":
+		m, ok := s.(interface {
+			UnmatchedChecks(context.Context) ([]contracts.Request, error)
+		})
+		if !ok {
+			fail(w, contracts.ErrUnavailable, "")
+			return
+		}
+		out, err = m.UnmatchedChecks(r.Context())
 	case "reservation-intent":
 		var c contracts.ReserveCommand
 		if !decode(w, r, &c) {
@@ -106,5 +146,19 @@ func (c *Client) HandleDelivery(ctx context.Context, v contracts.Delivery) (out 
 }
 func (c *Client) PendingWork(ctx context.Context) (out []contracts.Delivery, err error) {
 	err = c.exchange(ctx, "POST", "/commands/pending", "", struct{}{}, &out)
+	return
+}
+
+func (c *Client) SettleReservation(ctx context.Context, v contracts.ReserveCommand) (out contracts.ReservationResult, err error) {
+	err = c.exchange(ctx, "POST", "/commands/settle-reservation", "", v, &out)
+	return
+}
+func (c *Client) UnmatchedChecks(ctx context.Context) (out []contracts.Request, err error) {
+	err = c.exchange(ctx, "POST", "/commands/unmatched-checks", "", struct{}{}, &out)
+	return
+}
+
+func (c *Client) WakeMatch(ctx context.Context, id string, generation int64) (out contracts.Request, err error) {
+	err = c.exchange(ctx, "POST", "/commands/wake-match", "", wakeCommand{id, generation}, &out)
 	return
 }

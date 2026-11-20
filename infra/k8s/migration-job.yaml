@@ -13,7 +13,7 @@
         "containers": [
           {
             "name": "migrate",
-            "image": "erm-migrate:expanded",
+            "image": "erm-migrate:map-v9",
             "imagePullPolicy": "Never",
             "env": [
               {

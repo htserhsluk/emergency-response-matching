@@ -27,10 +27,17 @@ type CreateRequest struct {
 	Details  string    `json:"details"`
 }
 
-func (c CreateRequest) Validate() error {
-	switch c.Type {
+func validType(t string) bool {
+	switch t {
 	case "WATER", "FOOD", "MEDICINE", "TRANSPORTATION", "SHELTER":
+		return true
 	default:
+		return false
+	}
+}
+
+func (c CreateRequest) Validate() error {
+	if !validType(c.Type) {
 		return ErrInvalid
 	}
 	if c.Location == nil || c.Location.Latitude == nil || c.Location.Longitude == nil {
