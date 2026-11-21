@@ -26,11 +26,13 @@ Rebuild and load all five images before upgrading an existing deployment. Schema
 
 ## Restart, stop and inspection
 
+The dashboard launcher uses Minikube's Docker driver and the OpenSSH client. Run it in its own PowerShell window with Docker, Minikube, kubectl and ssh on PATH. The localhost URL stays the same when Kubernetes replaces the API pod.
+
 ```powershell
 minikube start -p erm-lab --driver=docker --kubernetes-version=v1.36.1
 kubectl --context erm-lab -n erm get deployments,statefulsets,pods,pvc,services
-kubectl --context erm-lab -n erm port-forward service/api 18080:8080
-# Visit http://localhost:18080/?tiles=off; stop the foreground forward with Ctrl+C.
+./scripts/open-dashboard.ps1
+# Visit http://localhost:18080/?tiles=off; stop the local Service tunnel with Ctrl+C.
 # At the end, stop any owned forwards, then:
 minikube stop -p erm-lab
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml stop

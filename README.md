@@ -103,7 +103,7 @@ Worker readiness now requires an active consumer session; liveness remains proce
 
 ## Browser and inbox
 
-Open `http://localhost:8080` for Compose. For Kubernetes, run `kubectl --context erm-lab -n erm port-forward service/api 18080:8080`, then open `http://localhost:18080`. The API serves the page and its versioned map library; no frontend build or extra service is required.
+Open `http://localhost:8080` for Compose. For Kubernetes, run `./scripts/open-dashboard.ps1`, then open `http://localhost:18080`. The API serves the page and its versioned map library; no frontend build or extra service is required.
 
 Filter saved locations by assistance type, select a resource to see up to five nearby eligible requests and its confirmed match, browse newest-first resource registrations, submit a request, look up its ID, inspect the saved assignment and mark it completed. The resource directory allows AVAILABLE/UNAVAILABLE transitions while allocated resources remain protected. The inbox belongs to the selected request and the shared `demo` recipient; it is not a private user account. Its read state survives refresh and service/database recovery.
 
