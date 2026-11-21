@@ -37,11 +37,13 @@ func (r *Router) GetResource(ctx context.Context, id string) (contracts.Resource
 	resource, err := n.GetResource(ctx, id)
 	if err == nil && resource.Status == "ALLOCATED" && resource.AllocatedAt.IsZero() {
 		// Confirmation evidence is optional when only the resource shard is live.
-		if owner, e := r.node(resource.AssignedRequestID); e == nil {
+		owner, lookupErr := r.node(resource.AssignedRequestID)
+		if lookupErr == nil {
 			lookup, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 			defer cancel()
-			resource.AllocationConfirmedAt, _ = owner.AllocationConfirmation(lookup, id, resource.AssignedRequestID)
+			resource.AllocationConfirmedAt, lookupErr = owner.AllocationConfirmation(lookup, id, resource.AssignedRequestID)
 		}
+		resource.AllocationConfirmationUnavailable = lookupErr != nil
 	}
 	return resource, err
 }

@@ -162,4 +162,12 @@ func TestAllocationHistoryRecoversCrossShardConfirmation(t *testing.T) {
 	if page.Items[0].Location == nil || *page.Items[0].Location.Latitude != 4 || page.Items[0].AssignedRequestID != request {
 		t.Fatal(page.Items[0])
 	}
+	urls[0] = ""
+	partial, err := coordinator.NewRouter(urls, secret).GetResource(ctx, legacy)
+	if err != nil || partial.ID != legacy || !partial.AllocationConfirmationUnavailable {
+		t.Fatalf("resource details during confirmation shard outage: %+v, %v", partial, err)
+	}
+	if unknown.AllocationConfirmationUnavailable || legacyResource.AllocationConfirmationUnavailable {
+		t.Fatal("successful confirmation checks must not require a retry")
+	}
 }

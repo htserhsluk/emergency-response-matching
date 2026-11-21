@@ -21,15 +21,16 @@ func (c RegisterResource) Validate() error {
 }
 
 type Resource struct {
-	AllocatedAt           time.Time `json:"allocatedAt,omitzero"`
-	AllocationConfirmedAt time.Time `json:"allocationConfirmedAt,omitzero"`
-	RegisteredAt          time.Time `json:"registeredAt,omitzero"`
-	ID                    string    `json:"id"`
-	Type                  string    `json:"type"`
-	Location              *Location `json:"location"`
-	Availability          bool      `json:"availability"`
-	Status                string    `json:"status"`
-	AssignedRequestID     string    `json:"assignedRequestId,omitempty"`
+	AllocationConfirmationUnavailable bool      `json:"allocationConfirmationUnavailable,omitempty"`
+	AllocatedAt                       time.Time `json:"allocatedAt,omitzero"`
+	AllocationConfirmedAt             time.Time `json:"allocationConfirmedAt,omitzero"`
+	RegisteredAt                      time.Time `json:"registeredAt,omitzero"`
+	ID                                string    `json:"id"`
+	Type                              string    `json:"type"`
+	Location                          *Location `json:"location"`
+	Availability                      bool      `json:"availability"`
+	Status                            string    `json:"status"`
+	AssignedRequestID                 string    `json:"assignedRequestId,omitempty"`
 }
 type ListQuery struct {
 	Sort   string `json:"sort,omitempty"`
