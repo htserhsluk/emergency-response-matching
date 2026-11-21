@@ -6,10 +6,7 @@ const path=require('node:path');
 const http=require('node:http');
 const {spawn}=require('node:child_process');
 
-const browser=[process.env.CHROME_BIN,
-  'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  '/usr/bin/chromium','/usr/bin/google-chrome'
-].find(file=>file&&fs.existsSync(file));
+const {chrome:browser}=require('./browser_fixture.cjs');
 
 test('Leaflet marker tips stay on saved coordinates through zoom and resize',{skip:!browser},async()=>{
  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'erm-map-'));
