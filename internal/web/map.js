@@ -1,6 +1,6 @@
 'use strict';
 // Display only: all eligibility and allocation decisions belong to the server.
-let responseMap,selectionLayer,assignmentLayer,currentMappedRequest='',mappedSignature='',lastFitSignature='',selectionRevision=0;
+let responseMap,selectionLayer,assignmentLayer,currentMappedRequest='',mappedSignature='',selectionRevision=0;
 const mapElement=id=>document.getElementById(id);
 let recordsLayer, detailLayer, records=new Map(), inspected=null;
 let locationsVersion=0, detailVersion=0, mapPoll, locationsSignature='', detailSignature='', detailFit='';
@@ -18,24 +18,77 @@ function mapOption(value,label){
  return option;
 }
 const recordKey=r=>r.kind+'/'+r.id;
+const typeName=type=>type?type.charAt(0)+type.slice(1).toLowerCase():'Saved';
+const recordLabel=r=>typeName(r.type)+' '+r.kind;
+const mapIncludes=type=>mapElement('map-type').value==='ALL'||mapElement('map-type').value===type;
+let popupVersion=0;
+function popupContent(record,notice=''){
+ const box=document.createElement('div');
+ box.className='record-popup';
+ const title=document.createElement('strong');title.textContent=recordLabel(record);box.append(title);
+ const fields=[
+  ['ID',record.id],['Assistance type',record.type],['Status',record.status],
+  ['Coordinates',pointOf(record.location).join(', ')],['Details',record.details],
+  ['Available',record.availability],['Created',record.createdAt],['Updated',record.updatedAt],
+  ['Registered',record.registeredAt],['Allocated',record.allocatedAt],['Allocation confirmed',record.allocationConfirmedAt],['Generation',record.generation],
+  ['Assigned resource',record.assignedResourceId||record.assignment?.resourceId],['Assigned request',record.assignedRequestId],
+  ['Distance (m)',record.distanceMeters??record.assignment?.distanceMeters],
+  ['Matching',record.matching?.state],['Search radius (m)',record.matching?.radiusMeters],
+  ['Assignment coordinates',record.assignment?.location&&pointOf(record.assignment.location).join(', ')]
+ ];
+ for(const [label,value] of fields){
+  if(value===undefined||value===null||value==='')continue;
+  const line=document.createElement('div');line.textContent=label+': '+value;box.append(line);
+ }
+ if(notice){const line=document.createElement('div');line.textContent=notice;box.append(line);}
+ return box;
+}
+async function showRecordPopup(r){
+ const version=++popupVersion;
+ const popup=L.popup({autoPan:false,maxWidth:280,maxHeight:230,offset:[0,-36]})
+  .setLatLng(pointOf(r.location)).setContent(popupContent(r)).openOn(responseMap);
+ try{
+  const full=await api('/'+r.kind+'s/'+encodeURIComponent(r.id));
+  if(version===popupVersion)popup.setContent(popupContent({...r,...full}));
+ }catch(e){if(version===popupVersion)popup.setContent(popupContent(r,'Additional details temporarily unavailable.'));}
+}
+function savedPin(record,style=record.kind,options={}){
+ return pin(pointOf(record.location),style,recordLabel(record),{...options,select:()=>{
+  if(options.inspect)inspectRecord(record);
+  showRecordPopup(record);
+ }});
+}
+function drawOverview(fit=false){
+ recordsLayer.clearLayers();
+ for(const r of records.values())savedPin(r,r.kind,{inspect:true,priority:100}).addTo(recordsLayer);
+ if(fit&&records.size)responseMap.fitBounds([...records.values()].map(r=>pointOf(r.location)),{padding:[40,45],maxZoom:14,animate:false});
+}
 function clearInspection(){
- ++detailVersion;
+ ++detailVersion;++popupVersion;++selectionRevision;
  inspected=null;detailSignature='';detailFit='';
- detailLayer.clearLayers();
+ responseMap.closePopup();detailLayer.clearLayers();clearMappedRequest();selectionLayer.clearLayers();
  mapElement('map-record').value='';
  mapElement('map-detail').textContent='';
 }
+function focusMapRequest(id){
+ if(!responseMap||!detailLayer)return;
+ if(inspected?.kind==='request'&&inspected.id===id)return;
+ clearInspection();recordsLayer.clearLayers();
+ inspected=records.get('request/'+id)||{kind:'request',id};
+ mapElement('map-record').value=recordKey(inspected);
+}
 function inspectRecord(record){
- clearInspection();clearMappedRequest();
- if(!record)return;
+ clearInspection();recordsLayer.clearLayers();
+ if(!record){drawOverview(true);return;}
  inspected=record;
  mapElement('map-record').value=recordKey(record);
  if(record.kind==='request'){
-  mapElement('map-detail').textContent='Request '+record.id+' · '+record.status;
+  mapElement('map-detail').textContent=recordLabel(record)+' '+record.id+' · '+record.status;
+  savedPin(record).addTo(assignmentLayer);
   follow(record.id);
  }else{
   mapElement('map-detail').textContent='Loading nearby requests…';
-  responseMap.setView(pointOf(record.location),14,{animate:false});
+  savedPin(record).addTo(detailLayer);
   refreshCandidates();
  }
 }
@@ -45,37 +98,37 @@ async function refreshCandidates(){
  try{
   const data=await api('/resources/'+encodeURIComponent(resource.id)+'/candidates');
   if(version!==detailVersion)return;
-  const candidates=data.items.slice(0,5),assigned=data.assignedRequest;
+  const assigned=data.assignedRequest,candidates=assigned?[]:data.items.slice(0,5);
   const origin=pointOf(resource.location),points=[origin];
   const signature=JSON.stringify([resource,candidates,assigned]);
   if(signature===detailSignature)return;
   detailLayer.clearLayers();
-  pin(origin,'resource','Selected resource '+resource.id,{priority:400}).addTo(detailLayer);
+  savedPin(resource,'resource',{priority:400}).addTo(detailLayer);
   const lines=['Resource '+resource.id+' · '+resource.status];
   candidates.forEach((request,index)=>{
    const point=pointOf(request.location);points.push(point);
-   pin(point,'candidate','Eligible request '+request.id,{rank:index+1,priority:500}).addTo(detailLayer);
+   savedPin({kind:'request',type:resource.type,...records.get('request/'+request.id),...request},'candidate',{rank:index+1,priority:500}).addTo(detailLayer);
    lines.push((index+1)+'. Eligible request '+request.id+' · '+Math.round(request.distanceMeters).toLocaleString()+' m');
   });
-  if(!candidates.length)lines.push('No eligible requests.');
+  if(!candidates.length&&!assigned)lines.push('No eligible requests.');
   if(assigned){
    const point=pointOf(assigned.location);points.push(point);
    L.polyline([origin,point],{color:'#16665b',weight:4,interactive:false}).addTo(detailLayer);
-   pin(point,'assigned','Assigned request '+assigned.id,{priority:600}).addTo(detailLayer);
+   savedPin({kind:'request',type:resource.type,...records.get('request/'+assigned.id),...assigned},'assigned',{priority:600}).addTo(detailLayer);
    lines.push('Assigned request '+assigned.id+' · '+Math.round(assigned.distanceMeters).toLocaleString()+' m');
   }
   mapElement('map-detail').textContent=lines.join('\n');
-  const fit=resource.id+'/'+(assigned?.id||'');
+  const fit=resource.id;
   if(fit!==detailFit){responseMap.fitBounds(points,{padding:[40,45],maxZoom:14,animate:false});detailFit=fit;}
   detailSignature=signature;
  }catch(e){
   if(version===detailVersion){detailSignature='';mapElement('map-detail').textContent='Could not refresh nearby requests. Retrying automatically.';}
  }
 }
-async function refreshLocations(){
+async function refreshLocations(fitOverview=false){
  if(!recordsLayer)return;
  clearTimeout(mapPoll);
- const version=++locationsVersion,type=mapElement('type').value,collected=new Map();
+ const version=++locationsVersion,type=mapElement('map-type').value,collected=new Map();
  try{
   let after='';
   do{
@@ -87,7 +140,7 @@ async function refreshLocations(){
   }while(after);
   const signature=JSON.stringify([...collected]);
   if(signature!==locationsSignature){
-   records=collected;recordsLayer.clearLayers();
+   records=collected;
    if(typeof createdResource!=='undefined'&&createdResource){
     const saved=records.get('resource/'+createdResource.id);
     if(saved?.status==='ALLOCATED'&&createdResource.status!=='ALLOCATED'){
@@ -95,16 +148,17 @@ async function refreshLocations(){
     }
    }
    const picker=mapElement('map-record');
-   picker.replaceChildren(mapOption('','Select a saved location'));
+   picker.replaceChildren(mapOption('','All locations'));
    for(const [key,r] of records){
-    const label=r.kind+' '+r.id+' · '+r.status;
+    const label=recordLabel(r)+' · '+r.status+' · '+r.id;
     picker.append(mapOption(key,label));
-    pin(pointOf(r.location),r.kind,label,{select:()=>inspectRecord(r),priority:100}).addTo(recordsLayer);
+
    }
    if(inspected&&records.has(recordKey(inspected))){inspected=records.get(recordKey(inspected));picker.value=recordKey(inspected);}
+   if(!inspected)drawOverview(fitOverview);
    locationsSignature=signature;
   }
-  mapElement('locations-note').textContent=records.size+' saved locations for '+type+'.';
+  mapElement('locations-note').textContent=records.size+' saved locations · '+(type==='ALL'?'All types':typeName(type))+'.';
   await refreshCandidates();
  }catch(e){if(version===locationsVersion)mapElement('locations-note').textContent='Could not refresh saved locations. Retrying automatically.';}
  finally{if(version===locationsVersion)mapPoll=setTimeout(refreshLocations,5000);}
@@ -112,36 +166,40 @@ async function refreshLocations(){
 function setupRecords(){
  recordsLayer=L.layerGroup().addTo(responseMap);detailLayer=L.layerGroup().addTo(responseMap);
  mapElement('map-record').addEventListener('change',e=>inspectRecord(records.get(e.target.value)));
- mapElement('type').addEventListener('change',()=>{
-  clearInspection();clearMappedRequest();recordsLayer.clearLayers();records.clear();locationsSignature='';
-  mapElement('map-record').replaceChildren(mapOption('','Select a saved location'));
-  mapElement('locations-note').textContent='Loading saved locations…';refreshLocations();
+ mapElement('map-type').addEventListener('change',()=>{
+  clearInspection();recordsLayer.clearLayers();records.clear();locationsSignature='';
+  mapElement('map-record').replaceChildren(mapOption('','All locations'));
+  mapElement('locations-note').textContent='Loading saved locations…';refreshLocations(true);
  });
- refreshLocations();
+ refreshLocations(true);
 }
 function drawAssignment(r){
- if(!responseMap||inspected?.kind==='resource'||(r.type&&r.type!==mapElement('type').value))return;
+ if(!responseMap||inspected?.kind!=='request'||inspected.id!==r.id)return;
+ if(r.type&&!mapIncludes(r.type)){inspectRecord(null);return;}
+ inspected={...r,kind:'request'};
+ mapElement('map-detail').textContent=recordLabel(inspected)+' '+r.id+' · '+r.status;
  const signature=JSON.stringify([r.id,r.location,r.assignment&&r.assignment.resourceId,r.assignment&&r.assignment.location]);
  if(signature===mappedSignature)return;
  const changedRequest=currentMappedRequest!==r.id;
  assignmentLayer.clearLayers();
  const requestPoint=[r.location.latitude,r.location.longitude],points=[requestPoint];
- pin(requestPoint,'request','Request '+r.id).addTo(assignmentLayer);
+ savedPin(inspected).addTo(assignmentLayer);
  const a=r.assignment;
  if(a&&a.location){
   const p=[a.location.latitude,a.location.longitude];points.push(p);
-  pin(p,'resource','Assigned resource '+a.resourceId).addTo(assignmentLayer);
+  savedPin({kind:'resource',id:a.resourceId,type:r.type,assignedRequestId:r.id,...records.get('resource/'+a.resourceId),location:a.location}).addTo(assignmentLayer);
   L.polyline([requestPoint,p],{color:'#16665b',dashArray:'5 5'}).addTo(assignmentLayer);
  }
- // Only new identities/coordinates alter the view; polling does not reset a pan.
- if(changedRequest||(points.length>1&&signature!==lastFitSignature)){responseMap.fitBounds(points,{padding:[45,45],maxZoom:14,animate:false});lastFitSignature=signature;}
+ // Fit once on selection so background status changes preserve the viewport.
+ if(changedRequest){responseMap.fitBounds(points,{padding:[45,45],maxZoom:14,animate:false});}
  currentMappedRequest=r.id;mappedSignature=signature;
 }
-function clearMappedRequest(){if(assignmentLayer)assignmentLayer.clearLayers();currentMappedRequest='';mappedSignature='';lastFitSignature='';}
+function clearMappedRequest(){if(assignmentLayer)assignmentLayer.clearLayers();currentMappedRequest='';mappedSignature='';}
 function selectLocation(lat,lon,pan=false,writeFields=true){
  selectionRevision++;
  if(writeFields){mapElement('latitude').value=Number(lat).toFixed(6);mapElement('longitude').value=Number(lon).toFixed(6);}
  if(!responseMap)return;
+ if(inspected){clearInspection();drawOverview();}
  selectionLayer.clearLayers();pin([lat,lon],'selection','Selected location').addTo(selectionLayer);
  if(pan)responseMap.setView([lat,lon],12,{animate:false});
 }
@@ -174,7 +232,7 @@ async function initializeMap(){
  if(!window.L){mapElement('map-note').textContent='Map library unavailable. Manual coordinates and device location still work.';return;}
  responseMap=L.map('map',{scrollWheelZoom:false}).setView([12.9,77.6],12);
  selectionLayer=L.layerGroup().addTo(responseMap);assignmentLayer=L.layerGroup().addTo(responseMap);
- const initial=locationInput();selectLocation(initial.latitude,initial.longitude);setupRecords();
+ setupRecords();
  responseMap.on('click',e=>selectLocation(Math.max(-90,Math.min(90,e.latlng.lat)),((e.latlng.lng+180)%360+360)%360-180));
  if(typeof ResizeObserver!=='undefined')new ResizeObserver(()=>responseMap.invalidateSize({pan:false})).observe(mapElement('map'));
  try{

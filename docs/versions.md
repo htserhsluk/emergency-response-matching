@@ -38,3 +38,5 @@ The15–16 November rehearsal used Docker Engine29.9.1, the same pinned applicat
 ## Expanded matching revision
 
 The November 18–19 deployment used `expanded` application/migration tags and schema 7 (persisted matching search progress). Go, PostgreSQL/PostGIS, RabbitMQ and Leaflet dependency versions remain unchanged. The Day 4/schema 6 and final-acceptance descriptions above identify previous milestones. See the 18–19 November entry in [evidence](evidence-index.md) for that release’s validation and data-preservation checks. Schema 8 adds registration ordering. Schema 9 adds automatic matching checks and maps saved search positions to the 4,000 km limit.
+
+Schema 10 adds allocation-time history. The focused map and resource directory deployment uses the `map-v10` image tags.

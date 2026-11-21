@@ -26,6 +26,36 @@ test('resource refresh reports completion even if unchanged',async()=>{
  assert.match(h.elements.get('resource-feedback').textContent,/unchanged/i);
 });
 
+test('directory rows show only the readable type and resource ID',async()=>{
+ const h=resourceHarness();
+ const load=vm.runInContext('resources()',h.context);
+ h.reply(0,'resource-one');
+ await load;
+ const row=h.elements.get('resource-list').children[0];
+ assert.deepEqual(row.children.map(child=>child.textContent),['Water resource','resource-one']);
+ assert.equal(typeof row.onclick,'function');
+});
+
+test('allocation history pages keep allocation sort and show known times in details',async()=>{
+ const h=resourceHarness();
+ h.elements.get('resource-filter').value='ALLOCATED';
+ h.elements.get('resource-filter').onchange();
+ const record={id:'history-id',type:'WATER',location:{latitude:0,longitude:1},availability:false,status:'ALLOCATED',assignedRequestId:'owner',allocatedAt:'2026-05-03T18:00:00Z',allocationConfirmedAt:'2026-05-03T18:01:00Z'};
+ h.waiting[0].resolve({ok:true,json:async()=>({items:[record],next:'cursor/abc'})});
+ await new Promise(setImmediate);
+ const next=h.elements.get('more-resources').onclick();
+ const url=new URL(h.waiting[1].path,'http://localhost');
+ assert.deepEqual(Object.fromEntries(url.searchParams),{sort:'allocated',limit:'20',after:'cursor/abc',status:'ALLOCATED'});
+ h.waiting[1].resolve({ok:true,json:async()=>({items:[record]})});
+ await next;
+ vm.runInContext('renderResourceDetails('+JSON.stringify(record)+')',h.context);
+ const fields=h.elements.get('resource-dialog-fields').children.map(node=>node.textContent);
+ assert.ok(fields.includes('Allocated'));
+ assert.ok(fields.includes('Allocation confirmed'));
+ assert.ok(fields.includes('owner'));
+ assert.equal(h.elements.get('resource-dialog-actions').children.length,0);
+});
+
 test('same request older poll cannot overwrite a newer completion response',async()=>{
  const h=resourceHarness();vm.runInContext("selected='request-one';notifications=async()=>{}",h.context);
  const older=vm.runInContext('refresh()',h.context),newer=vm.runInContext('refresh()',h.context);
@@ -53,6 +83,7 @@ test('filter changes reset paging and suppress old filter results',async()=>{
  const h=resourceHarness();const old=vm.runInContext("resources('old-cursor')",h.context);
  h.elements.get('resource-filter').value='ALLOCATED';h.elements.get('resource-filter').onchange();
  assert.match(h.waiting[1].path,/after=&status=ALLOCATED/);
+ assert.match(h.waiting[1].path,/sort=allocated/);
  h.reply(1,'history');await new Promise(setImmediate);h.reply(0,'old-unallocated');await old;
  assert.equal(h.elements.get('resource-list').children[0].children[1].textContent,'history');
 });

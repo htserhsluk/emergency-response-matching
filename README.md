@@ -37,9 +37,9 @@ Build the Compose application images and the migration image:
 
 ```powershell
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml build api coordinator node-0a matching
-docker build -f infra/Dockerfile.migrate -t erm-migrate:map-v9 .
-docker build -f infra/Dockerfile --build-arg SERVICE=matching -t erm-matching:map-v9 .
-minikube -p erm-lab image load erm-api:map-v9 erm-coordinator:map-v9 erm-storage-node:map-v9 erm-migrate:map-v9 erm-matching:map-v9
+docker build -f infra/Dockerfile.migrate -t erm-migrate:map-v10 .
+docker build -f infra/Dockerfile --build-arg SERVICE=matching -t erm-matching:map-v10 .
+minikube -p erm-lab image load erm-api:map-v10 erm-coordinator:map-v10 erm-storage-node:map-v10 erm-migrate:map-v10 erm-matching:map-v10
 ./scripts/bootstrap-k8s.ps1 # new namespace/storage only
 ```
 
