@@ -1,7 +1,8 @@
 package contracts
 
-// The last radius covers the greatest geodesic separation on Earth.
-var SearchRadii = [...]float64{0, 1000, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000, 2500000, 5000000, 10000000, 20100000}
+const MaxMatchDistanceMeters = 4_000_000
+
+var SearchRadii = [...]float64{0, 1000, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000, 2500000, MaxMatchDistanceMeters}
 
 type SearchProgress struct {
 	RadiusIndex   int     `json:"radiusIndex"`

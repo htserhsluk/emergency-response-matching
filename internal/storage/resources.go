@@ -8,12 +8,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const resourceColumns = `id,type,ST_Y(location::geometry),ST_X(location::geometry),availability,status,coalesce(assigned_request_id,'')`
+const resourceColumns = `id,type,ST_Y(location::geometry),ST_X(location::geometry),availability,status,coalesce(assigned_request_id,''),registered_at`
 
 func scanResource(row pgx.Row) (contracts.Resource, error) {
 	var r contracts.Resource
 	var lat, lon float64
-	err := row.Scan(&r.ID, &r.Type, &lat, &lon, &r.Availability, &r.Status, &r.AssignedRequestID)
+	err := row.Scan(&r.ID, &r.Type, &lat, &lon, &r.Availability, &r.Status, &r.AssignedRequestID, &r.RegisteredAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, contracts.ErrNotFound
 	}
@@ -119,18 +119,42 @@ func (s *Store) ListResources(ctx context.Context, q contracts.ListQuery) (contr
 	if q.Validate() != nil {
 		return out, contracts.ErrInvalid
 	}
-	rows, err := s.pool.Query(ctx, `SELECT `+resourceColumns+` FROM resources WHERE id>$1 AND ($3='' OR status=$3 OR ($3='UNALLOCATED' AND status IN ('AVAILABLE','UNAVAILABLE'))) ORDER BY id LIMIT $2`, q.After, q.Limit, q.Status)
+	query := `SELECT ` + resourceColumns + ` FROM resources
+		WHERE ($1='' OR status=$1 OR ($1='UNALLOCATED' AND status IN ('AVAILABLE','UNAVAILABLE')))
+		AND ($2='' OR type=$2)`
+	args := []any{q.Status, q.Type, q.Limit + 1}
+	if q.Sort == "newest" {
+		if q.After != "" {
+			registered, id, err := q.NewestCursor()
+			if err != nil {
+				return out, err
+			}
+			query += ` AND (registered_at,id)<($4,$5)`
+			args = append(args, registered, id)
+		}
+		query += ` ORDER BY registered_at DESC,id DESC LIMIT $3`
+	} else {
+		query += ` AND id>$4 ORDER BY id LIMIT $3`
+		args = append(args, q.After)
+	}
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return out, err
 	}
 	defer rows.Close()
 	for rows.Next() {
+		if len(out.Items) == q.Limit {
+			out.Next = q.CursorFor(out.Items[q.Limit-1])
+			break
+		}
 		r, err := scanResource(rows)
 		if err != nil {
 			return out, err
 		}
 		out.Items = append(out.Items, r)
-		out.Next = r.ID
+		if q.Sort == "" {
+			out.Next = r.ID
+		}
 	}
 	return out, rows.Err()
 }

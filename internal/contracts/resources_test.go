@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestResourceListNewestCursorAndFilter(t *testing.T) {
+	const id = "00000000000000000000000000000001"
+	for _, tc := range []struct {
+		body  string
+		valid bool
+	}{
+		{`{"limit":2,"type":"WATER","sort":"newest","after":"2025-03-29T10:11:12.123456Z/00000000000000000000000000000001"}`, true},
+		{`{"limit":2,"type":"UNKNOWN"}`, false},
+		{`{"limit":2,"sort":"other"}`, false},
+		{`{"limit":2,"sort":"newest","after":"` + id + `"}`, false},
+	} {
+		var q ListQuery
+		if err := json.Unmarshal([]byte(tc.body), &q); err != nil {
+			t.Fatal(err)
+		}
+		if (q.Validate() == nil) != tc.valid {
+			t.Errorf("validation: %s", tc.body)
+		}
+	}
+}
+
 func TestResourceListStatusFilter(t *testing.T) {
 	for _, status := range []string{"", "UNALLOCATED", "AVAILABLE", "UNAVAILABLE", "ALLOCATED"} {
 		var q ListQuery

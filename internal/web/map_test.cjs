@@ -2,15 +2,15 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
-function harness(geo,tiles=false){
+function harness(geo,tiles=false,apiOverride){
  const elements=new Map(),groups=[],views=[],timers=new Map();let resize,timerId=0;const tileEvents={};
- const element=()=>({value:'',textContent:'',disabled:false,addEventListener(name,fn){this[name]=fn;}});
+ const element=()=>({value:'',textContent:'',disabled:false,children:[],append(...nodes){this.children.push(...nodes);},replaceChildren(...nodes){this.children=nodes;},addEventListener(name,fn){this[name]=fn;}});
  const get=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
- get('latitude').value='12.9';get('longitude').value='77.6';
+ get('type').value='WATER';get('latitude').value='12.9';get('longitude').value='77.6';
  const map={setView(p){views.push(p);return this;},fitBounds(p){views.push(p);return this;},on(name,fn){this[name]=fn;return this;},invalidateSize(){}};
- const marker=point=>({point,bindTooltip(){return this;},addTo(g){g.items.push(this);return this;}});
+ const marker=(point,options)=>({point,options,on(event,fn){this[event]=fn;return this;},bindTooltip(){return this;},addTo(g){g.items.push(this);return this;}});
  const L={tileLayer(){return {addTo(){if(tileEvents.loading)tileEvents.loading();return this;},on(event,fn){tileEvents[event]=fn;return this;}};},map:()=>map,layerGroup(){const g={items:[],addTo(){groups.push(this);return this;},clearLayers(){this.items=[];}};return g;},marker,circleMarker:marker,polyline:marker,divIcon:o=>o,latLngBounds:p=>p};
- const context=vm.createContext({window:{L},L,document:{getElementById:get,createElement:element},navigator:geo?{geolocation:geo}:{},location:{search:tiles?'':'?tiles=off'},URLSearchParams,ResizeObserver:class{constructor(fn){resize=fn;}observe(){}},api:async()=>tiles?({tileUrl:"https://example.invalid/{z}/{x}/{y}.png",attribution:"Fixture tiles"}):({}),locationInput:()=>({latitude:Number(get('latitude').value),longitude:Number(get('longitude').value)}),message(){},setTimeout:fn=>fn()});
+ const context=vm.createContext({window:{L},L,document:{getElementById:get,createElement:element},navigator:geo?{geolocation:geo}:{},location:{search:tiles?'':'?tiles=off'},URLSearchParams,ResizeObserver:class{constructor(fn){resize=fn;}observe(){}},api:apiOverride||(async path=>path.startsWith('/map/locations')?{items:[]}:tiles?({tileUrl:"https://example.invalid/{z}/{x}/{y}.png",attribution:"Fixture tiles"}):({})),locationInput:()=>({latitude:Number(get('latitude').value),longitude:Number(get('longitude').value)}),message(){},setTimeout:fn=>fn()});
  context.setTimeout=fn=>{timers.set(++timerId,fn);return timerId;};context.clearTimeout=id=>timers.delete(id);
  vm.runInContext(fs.readFileSync(__dirname+'/map.js','utf8'),context);
  return {context,get,groups,views,map,tileEvents,resize:()=>resize(),tick(){const pending=[...timers.values()];timers.clear();pending.forEach(fn=>fn());}};
@@ -80,4 +80,82 @@ test('tile loading reports slow responses, completion and recoverable failure',a
  assert.match(h.get('map-note').textContent,/unavailable/i);
  h.tileEvents.loading();h.tileEvents.load();h.tick();
  assert.match(h.get('map-note').textContent,/loaded/i);assert.equal(h.groups[0].items.length,1);
+});
+
+test('all pin symbols have a geographic tip at the declared anchor',()=>{
+ const h=harness();
+ for(const kind of ['selection','resource','request']){
+  const icon=vm.runInContext(`pin([12,77],'${kind}','Example').options.icon`,h.context);
+  assert.deepEqual(Array.from(icon.iconAnchor),[icon.iconSize[0]/2,icon.iconSize[1]]);
+ }
+ const css=fs.readFileSync(__dirname+'/styles.css','utf8');
+ assert.doesNotMatch(css,/\.location-pin[^{}]*\{[^{}]*transform:\s*translate/);
+ assert.match(css,/\.location-pin[^{}]*::after/);
+});
+test('map pages all matching locations and selecting a resource draws candidates and a single confirmed link',async()=>{
+ const location={latitude:12,longitude:77},resource={id:'s',kind:'resource',type:'WATER',status:'ALLOCATED',location};
+ const request={id:'r',kind:'request',type:'WATER',status:'ASSIGNED',location},paths=[];
+ const h=harness(undefined,false,async path=>{
+  paths.push(path);
+  if(path.startsWith('/map/locations'))return path.includes('after=next')?{items:[request]}:{items:[resource],next:'next'};
+  if(path.includes('/candidates'))return {items:[{id:'eligible',location:{latitude:13,longitude:78},distanceMeters:100}],assignedRequest:{id:'r',location,distanceMeters:0}};
+  return {};
+ });
+ await new Promise(setImmediate);
+ assert.ok(paths.some(path=>path.includes('type=WATER')&&path.includes('after=next')));
+ const recordPins=h.groups.flatMap(group=>group.items).filter(marker=>marker.options?.title?.includes('s')&&marker.click);
+ const resourcePin=recordPins.find(marker=>marker.options.title.includes('resource')||marker.options.title.includes('Resource'));
+ assert.ok(resourcePin);resourcePin.click();await new Promise(setImmediate);
+ assert.ok(paths.includes('/resources/s/candidates'));
+ assert.equal(h.groups.flatMap(group=>group.items).filter(marker=>Array.isArray(marker.point[0])).length,1);
+ assert.match(h.get('map-detail').textContent,/eligible/i);
+ assert.match(h.get('map-detail').textContent,/assigned.*r/i);
+});
+test('changing map type while an earlier page is loading discards stale records',async()=>{
+ let finish;
+ const h=harness(undefined,false,async path=>{
+  if(path.includes('type=WATER'))return new Promise(resolve=>finish=resolve);
+  return {items:[]};
+ });
+ await new Promise(setImmediate);h.get('type').value='FOOD';h.get('type').change();await new Promise(setImmediate);
+ finish({items:[{id:'stale',kind:'resource',location:{latitude:0,longitude:0}}]});await new Promise(setImmediate);
+ assert.equal(h.groups.flatMap(group=>group.items).some(marker=>marker.options?.title?.includes('stale')),false);
+});
+test('request polling cannot draw a second assignment while inspecting a resource or another type',()=>{
+ const h=harness();
+ h.context.fixture={id:'old',type:'FOOD',location:{latitude:0,longitude:0},assignment:{resourceId:'used',location:{latitude:1,longitude:1}}};
+ vm.runInContext('drawAssignment(fixture)',h.context);
+ assert.equal(h.groups[1].items.length,0);
+ vm.runInContext("inspected={kind:'resource'};drawAssignment({...fixture,type:'WATER'})",h.context);
+ assert.equal(h.groups[1].items.length,0);
+});
+test('resource polling replaces the preview with its confirmed assignment and ignores late detail responses',async()=>{
+ const location={latitude:0,longitude:0},s={id:'one',kind:'resource',type:'WATER',status:'AVAILABLE',location};
+ const other={...s,id:'two'},pending=[];
+ const h=harness(undefined,false,async path=>{
+  if(path.includes('/map/locations'))return {items:[s,other]};
+  if(path.endsWith('/candidates'))return new Promise(resolve=>pending.push(resolve));
+  return {};
+ });
+ await new Promise(setImmediate);
+ const select=id=>h.get('map-record').change({target:{value:'resource/'+id}});
+ select('one');select('two');
+ pending[1]({items:[{id:'eligible-request',location,distanceMeters:0}]});await new Promise(setImmediate);
+ pending[0]({items:[],assignedRequest:{id:'old-resource-match',location,distanceMeters:0}});await new Promise(setImmediate);
+ assert.match(h.get('map-detail').textContent,/eligible-request/);
+ assert.doesNotMatch(h.get('map-detail').textContent,/old-resource-match/);
+ h.tick();await new Promise(setImmediate);
+ pending[2]({items:[],assignedRequest:{id:'confirmed-request',location,distanceMeters:0}});await new Promise(setImmediate);
+ assert.match(h.get('map-detail').textContent,/Assigned request confirmed-request/);
+ assert.doesNotMatch(h.get('map-detail').textContent,/eligible-request/);
+ assert.equal(h.groups.flatMap(group=>group.items).filter(marker=>Array.isArray(marker.point[0])).length,1);
+});
+test('a saved-location refresh updates the recently registered resource card after automatic allocation',async()=>{
+ const location={latitude:0,longitude:0},s={id:'one',kind:'resource',type:'WATER',status:'AVAILABLE',location};
+ const h=harness(undefined,false,async path=>path.includes('/map/locations')?{items:[{...s,status:'ALLOCATED',assignedRequestId:'saved'}]}:{});
+ h.context.createdResource=s;
+ let saved;
+ h.context.showCreatedResource=updated=>{saved=updated;};
+ await new Promise(setImmediate);
+ assert.equal(saved?.status,'ALLOCATED');assert.equal(saved?.assignedRequestId,'saved');
 });

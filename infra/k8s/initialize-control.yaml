@@ -17,7 +17,7 @@
         "containers": [
           {
             "name": "initialize",
-            "image": "erm-coordinator:expanded",
+            "image": "erm-coordinator:map-v9",
             "imagePullPolicy": "Never",
             "args": [
               "init-control",

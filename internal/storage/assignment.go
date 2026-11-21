@@ -9,6 +9,16 @@ import (
 )
 
 func (s *Store) Reserve(ctx context.Context, c contracts.ReserveCommand) (contracts.ReservationResult, error) {
+	return s.reserve(ctx, c, false)
+}
+
+// SettleReservation replays an existing outcome or durably rejects an unexecuted
+// legacy command under the same assignment lock used by ordinary reservations.
+func (s *Store) SettleReservation(ctx context.Context, c contracts.ReserveCommand) (contracts.ReservationResult, error) {
+	return s.reserve(ctx, c, true)
+}
+
+func (s *Store) reserve(ctx context.Context, c contracts.ReserveCommand, settleOnly bool) (contracts.ReservationResult, error) {
 	var out contracts.ReservationResult
 	if c.Validate() != nil {
 		return out, contracts.ErrInvalid
@@ -37,14 +47,17 @@ func (s *Store) Reserve(ctx context.Context, c contracts.ReserveCommand) (contra
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return out, err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE resources SET status='ALLOCATED',availability=false,assigned_request_id=$2,version=version+1 WHERE id=$1 AND availability AND status='AVAILABLE' AND assigned_request_id IS NULL`, c.ResourceID, c.RequestID)
-	if err != nil {
-		return out, err
-	}
-	out = contracts.ReservationResult{AssignmentID: c.AssignmentID, RequestID: c.RequestID, ResourceID: c.ResourceID, Status: "REJECTED", Reason: "NOT_AVAILABLE"}
-	if tag.RowsAffected() == 1 {
-		out.Status = "SUCCEEDED"
-		out.Reason = ""
+	out = contracts.ReservationResult{AssignmentID: c.AssignmentID, RequestID: c.RequestID, ResourceID: c.ResourceID, Status: "REJECTED", Reason: "OUTSIDE_MATCH_RADIUS"}
+	if !settleOnly {
+		tag, err := tx.Exec(ctx, `UPDATE resources SET status='ALLOCATED',availability=false,assigned_request_id=$2,version=version+1 WHERE id=$1 AND availability AND status='AVAILABLE' AND assigned_request_id IS NULL`, c.ResourceID, c.RequestID)
+		if err != nil {
+			return out, err
+		}
+		out.Reason = "NOT_AVAILABLE"
+		if tag.RowsAffected() == 1 {
+			out.Status = "SUCCEEDED"
+			out.Reason = ""
+		}
 	}
 	data, err = json.Marshal(out)
 	if err != nil {
@@ -79,6 +92,9 @@ func (s *Store) BeginIntent(ctx context.Context, c contracts.IntentCommand) (con
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return out, err
+	}
+	if c.DistanceMeters > contracts.MaxMatchDistanceMeters {
+		return out, contracts.ErrInvalid
 	}
 	request, err := scan(tx.QueryRow(ctx, selectRequest+" FOR UPDATE", c.RequestID))
 	if err != nil {

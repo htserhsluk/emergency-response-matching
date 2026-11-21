@@ -10,19 +10,19 @@ Use PowerShell7 from the repository root. Tools: Docker Desktop Linux engine, Mi
 
 ```powershell
 foreach ($service in @('api','coordinator','storage-node','matching')) {
-    docker build -f infra/Dockerfile --build-arg "SERVICE=$service" -t "erm-${service}:expanded" .
+    docker build -f infra/Dockerfile --build-arg "SERVICE=$service" -t "erm-${service}:map-v9" .
     if ($LASTEXITCODE) { throw "Build failed: $service" }
 }
-docker build -f infra/Dockerfile.migrate -t erm-migrate:expanded .
+docker build -f infra/Dockerfile.migrate -t erm-migrate:map-v9 .
 if ($LASTEXITCODE) { throw 'Migration image build failed' }
-minikube -p erm-lab image load erm-api:expanded erm-coordinator:expanded erm-storage-node:expanded erm-matching:expanded erm-migrate:expanded
+minikube -p erm-lab image load erm-api:map-v9 erm-coordinator:map-v9 erm-storage-node:map-v9 erm-matching:map-v9 erm-migrate:map-v9
 if ($LASTEXITCODE) { throw 'Image load failed' }
 ./scripts/bootstrap-k8s.ps1
 ```
 
-Bootstrap initializes the coordinator once, migrates each initial primary through migrations1–7, then brings up its standby and enables synchronous replay. It refuses an existing control PVC. For subsequent upgrades use `./scripts/upgrade-k8s.ps1`; it follows saved primaries and resets Matching to one worker. Never blindly bootstrap over an interrupted installation: inspect Jobs, roles, PVCs and journal state first.
+Bootstrap initializes the coordinator once, migrates each initial primary through schema 9, then brings up its standby and enables synchronous replay. It refuses an existing control PVC. For subsequent upgrades use `./scripts/upgrade-k8s.ps1`; it follows saved primaries and resets Matching to one worker. Never blindly bootstrap over an interrupted installation: inspect Jobs, roles, PVCs and journal state first.
 
-The `expanded` tags contain the progressive-search and UI revision, including migration7. Retain previous images for reference; tags are mutable, so record image IDs and source revision for each rehearsal. Never downgrade migration7 by dropping saved search progress.
+Rebuild and load all five images before upgrading an existing schema 7 deployment. Schema 8 timestamps new resource registrations. Schema 9 updates the search limit and enables automatic retries for unmatched requests. The `map-v9` images are separate from the earlier `expanded` images. Record the image IDs and source revision for each rehearsal.
 
 ## Restart, stop and inspection
 
@@ -77,7 +77,7 @@ $env:KUBECONFIG = Join-Path (Get-Location) '.local/release-kubeconfig'
 # Refuse/review an existing rehearsal profile or kubeconfig before starting.
 minikube start -p erm-release --driver=docker --kubernetes-version=v1.36.1 --cpus=2 --memory=3072
 kubectl config rename-context erm-release erm-lab
-minikube -p erm-release image load erm-api:expanded erm-coordinator:expanded erm-storage-node:expanded erm-matching:expanded erm-migrate:expanded
+minikube -p erm-release image load erm-api:map-v9 erm-coordinator:map-v9 erm-storage-node:map-v9 erm-matching:map-v9 erm-migrate:map-v9
 ./scripts/bootstrap-k8s.ps1
 # Run the acceptance/rehearsal commands above against this isolated kubeconfig.
 # Preserve its logs and volumes; restore the original environment afterward:
@@ -88,4 +88,4 @@ minikube start -p erm-lab --driver=docker --kubernetes-version=v1.36.1
 
 Check every external command's exit status before continuing. An existing `.local/release-kubeconfig` or `erm-release` profile is a resumable rehearsal, not a fresh one. Do not remove it automatically. Do not run two full stacks simultaneously on a small laptop. Authentication/kubeconfig files, raw private logs and credentials stay uncommitted.
 
-The public smoke script now creates a unique exact-location fixture and preserves existing records. Global exhausted-empty behavior belongs to the isolated integration fixture, where all resources are controlled; geographic distance alone no longer isolates an empty live search.
+The public smoke script now creates a unique exact-location fixture and preserves existing records. The isolated integration fixture controls the available supply and checks that exhausting the 4,000 km search leaves the request unmatched.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/htserhsluk/emergency-response-matching/internal/contracts"
 	"github.com/htserhsluk/emergency-response-matching/internal/routing"
+	"github.com/jackc/pgx/v5"
 	"time"
 )
 
@@ -103,14 +104,7 @@ func (s *Store) ScheduleMatch(ctx context.Context, id, key string) (contracts.Re
 		return out, err
 	}
 	if out.Status == "UNMATCHED" {
-		out.Status = "PENDING"
-		out.Generation++
-		if _, err = tx.Exec(ctx, `UPDATE requests SET status='PENDING',generation=$2,version=version+1 WHERE id=$1`, id, out.Generation); err != nil {
-			return out, err
-		}
-		event := contracts.MatchEvent{SchemaVersion: 1, EventID: contracts.EntityID("match-event", fmt.Sprintf("%s:%d", id, out.Generation)), RequestID: id, Generation: out.Generation, CreatedAt: time.Now().UTC()}
-		data, _ := json.Marshal(event)
-		if _, err = tx.Exec(ctx, `INSERT INTO outbox_events(delivery_id,event_id,request_id,generation,payload) VALUES($1,$2,$3,$4,$5)`, contracts.DeliveryID(event.EventID, 0, "request.match"), event.EventID, id, out.Generation, data); err != nil {
+		if err = startNextGeneration(ctx, tx, &out); err != nil {
 			return out, err
 		}
 	}
@@ -118,4 +112,46 @@ func (s *Store) ScheduleMatch(ctx context.Context, id, key string) (contracts.Re
 		return out, err
 	}
 	return out, commit(ctx, tx)
+}
+
+// WakeMatch ties an availability probe to the generation it observed. Multiple
+// coordinators and manual retries race through the same request lock.
+func (s *Store) WakeMatch(ctx context.Context, id string, generation int64) (contracts.Request, error) {
+	var out contracts.Request
+	if _, err := routing.ShardFor(id); err != nil || generation < 1 {
+		return out, contracts.ErrInvalid
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer cleanup(tx)
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, id); err != nil {
+		return out, err
+	}
+	out, err = scan(tx.QueryRow(ctx, selectRequest+" FOR UPDATE", id))
+	if err != nil {
+		return out, err
+	}
+	if out.Status == "UNMATCHED" && out.Generation == generation {
+		if err = startNextGeneration(ctx, tx, &out); err != nil {
+			return out, err
+		}
+	}
+	return out, commit(ctx, tx)
+}
+func startNextGeneration(ctx context.Context, tx pgx.Tx, out *contracts.Request) error {
+	out.Status = "PENDING"
+	out.Generation++
+	if _, err := tx.Exec(ctx, `UPDATE requests SET status='PENDING',generation=$2,version=version+1 WHERE id=$1`, out.ID, out.Generation); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	event := contracts.MatchEvent{SchemaVersion: 1, EventID: contracts.EntityID("match-event", fmt.Sprintf("%s:%d", out.ID, out.Generation)), RequestID: out.ID, Generation: out.Generation, CreatedAt: now}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO outbox_events(delivery_id,event_id,request_id,generation,payload) VALUES($1,$2,$3,$4,$5)`, contracts.DeliveryID(event.EventID, 0, "request.match"), event.EventID, out.ID, out.Generation, payload)
+	return err
 }

@@ -2,13 +2,125 @@
 // Display only: all eligibility and allocation decisions belong to the server.
 let responseMap,selectionLayer,assignmentLayer,currentMappedRequest='',mappedSignature='',lastFitSignature='',selectionRevision=0;
 const mapElement=id=>document.getElementById(id);
-function pin(point,kind,label){
- const symbols={selection:'◆',request:'R',resource:'+'};
- const icon=L.divIcon({className:'location-pin '+kind,html:'<span>'+symbols[kind]+'</span>',iconSize:[32,40],iconAnchor:[16,40]});
- return L.marker(point,{icon,title:label,alt:label,zIndexOffset:kind==='selection'?300:kind==='request'?200:100}).bindTooltip(label);
+let recordsLayer, detailLayer, records=new Map(), inspected=null;
+let locationsVersion=0, detailVersion=0, mapPoll, locationsSignature='', detailSignature='', detailFit='';
+const pointOf=location=>[location.latitude,location.longitude];
+function pin(point,kind,label,options={}){
+ const symbols={selection:'◆',request:'R',resource:'+',candidate:'?',assigned:'✓'};
+ const icon=L.divIcon({className:'location-pin '+kind,html:'<span>'+(options.rank||symbols[kind])+'</span>',iconSize:[32,40],iconAnchor:[16,40],tooltipAnchor:[0,-32]});
+ const marker=L.marker(point,{icon,title:label,alt:label,interactive:!!options.select,keyboard:!!options.select,zIndexOffset:options.priority||0});
+ if(options.select)marker.on('click',options.select);
+ return marker.bindTooltip(label);
+}
+function mapOption(value,label){
+ const option=document.createElement('option');
+ option.value=value;option.textContent=label;
+ return option;
+}
+const recordKey=r=>r.kind+'/'+r.id;
+function clearInspection(){
+ ++detailVersion;
+ inspected=null;detailSignature='';detailFit='';
+ detailLayer.clearLayers();
+ mapElement('map-record').value='';
+ mapElement('map-detail').textContent='';
+}
+function inspectRecord(record){
+ clearInspection();clearMappedRequest();
+ if(!record)return;
+ inspected=record;
+ mapElement('map-record').value=recordKey(record);
+ if(record.kind==='request'){
+  mapElement('map-detail').textContent='Request '+record.id+' · '+record.status;
+  follow(record.id);
+ }else{
+  mapElement('map-detail').textContent='Loading nearby requests…';
+  responseMap.setView(pointOf(record.location),14,{animate:false});
+  refreshCandidates();
+ }
+}
+async function refreshCandidates(){
+ if(inspected?.kind!=='resource')return;
+ const resource=inspected,version=++detailVersion;
+ try{
+  const data=await api('/resources/'+encodeURIComponent(resource.id)+'/candidates');
+  if(version!==detailVersion)return;
+  const candidates=data.items.slice(0,5),assigned=data.assignedRequest;
+  const origin=pointOf(resource.location),points=[origin];
+  const signature=JSON.stringify([resource,candidates,assigned]);
+  if(signature===detailSignature)return;
+  detailLayer.clearLayers();
+  pin(origin,'resource','Selected resource '+resource.id,{priority:400}).addTo(detailLayer);
+  const lines=['Resource '+resource.id+' · '+resource.status];
+  candidates.forEach((request,index)=>{
+   const point=pointOf(request.location);points.push(point);
+   pin(point,'candidate','Eligible request '+request.id,{rank:index+1,priority:500}).addTo(detailLayer);
+   lines.push((index+1)+'. Eligible request '+request.id+' · '+Math.round(request.distanceMeters).toLocaleString()+' m');
+  });
+  if(!candidates.length)lines.push('No eligible requests.');
+  if(assigned){
+   const point=pointOf(assigned.location);points.push(point);
+   L.polyline([origin,point],{color:'#16665b',weight:4,interactive:false}).addTo(detailLayer);
+   pin(point,'assigned','Assigned request '+assigned.id,{priority:600}).addTo(detailLayer);
+   lines.push('Assigned request '+assigned.id+' · '+Math.round(assigned.distanceMeters).toLocaleString()+' m');
+  }
+  mapElement('map-detail').textContent=lines.join('\n');
+  const fit=resource.id+'/'+(assigned?.id||'');
+  if(fit!==detailFit){responseMap.fitBounds(points,{padding:[40,45],maxZoom:14,animate:false});detailFit=fit;}
+  detailSignature=signature;
+ }catch(e){
+  if(version===detailVersion){detailSignature='';mapElement('map-detail').textContent='Could not refresh nearby requests. Retrying automatically.';}
+ }
+}
+async function refreshLocations(){
+ if(!recordsLayer)return;
+ clearTimeout(mapPoll);
+ const version=++locationsVersion,type=mapElement('type').value,collected=new Map();
+ try{
+  let after='';
+  do{
+   const query=new URLSearchParams({type,after});
+   const page=await api('/map/locations?'+query);
+   if(version!==locationsVersion)return;
+   for(const record of page.items)collected.set(recordKey(record),record);
+   after=page.next||'';
+  }while(after);
+  const signature=JSON.stringify([...collected]);
+  if(signature!==locationsSignature){
+   records=collected;recordsLayer.clearLayers();
+   if(typeof createdResource!=='undefined'&&createdResource){
+    const saved=records.get('resource/'+createdResource.id);
+    if(saved?.status==='ALLOCATED'&&createdResource.status!=='ALLOCATED'){
+     showCreatedResource({...createdResource,...saved,availability:false});
+    }
+   }
+   const picker=mapElement('map-record');
+   picker.replaceChildren(mapOption('','Select a saved location'));
+   for(const [key,r] of records){
+    const label=r.kind+' '+r.id+' · '+r.status;
+    picker.append(mapOption(key,label));
+    pin(pointOf(r.location),r.kind,label,{select:()=>inspectRecord(r),priority:100}).addTo(recordsLayer);
+   }
+   if(inspected&&records.has(recordKey(inspected))){inspected=records.get(recordKey(inspected));picker.value=recordKey(inspected);}
+   locationsSignature=signature;
+  }
+  mapElement('locations-note').textContent=records.size+' saved locations for '+type+'.';
+  await refreshCandidates();
+ }catch(e){if(version===locationsVersion)mapElement('locations-note').textContent='Could not refresh saved locations. Retrying automatically.';}
+ finally{if(version===locationsVersion)mapPoll=setTimeout(refreshLocations,5000);}
+}
+function setupRecords(){
+ recordsLayer=L.layerGroup().addTo(responseMap);detailLayer=L.layerGroup().addTo(responseMap);
+ mapElement('map-record').addEventListener('change',e=>inspectRecord(records.get(e.target.value)));
+ mapElement('type').addEventListener('change',()=>{
+  clearInspection();clearMappedRequest();recordsLayer.clearLayers();records.clear();locationsSignature='';
+  mapElement('map-record').replaceChildren(mapOption('','Select a saved location'));
+  mapElement('locations-note').textContent='Loading saved locations…';refreshLocations();
+ });
+ refreshLocations();
 }
 function drawAssignment(r){
- if(!responseMap)return;
+ if(!responseMap||inspected?.kind==='resource'||(r.type&&r.type!==mapElement('type').value))return;
  const signature=JSON.stringify([r.id,r.location,r.assignment&&r.assignment.resourceId,r.assignment&&r.assignment.location]);
  if(signature===mappedSignature)return;
  const changedRequest=currentMappedRequest!==r.id;
@@ -22,7 +134,7 @@ function drawAssignment(r){
   L.polyline([requestPoint,p],{color:'#16665b',dashArray:'5 5'}).addTo(assignmentLayer);
  }
  // Only new identities/coordinates alter the view; polling does not reset a pan.
- if(changedRequest||(points.length>1&&signature!==lastFitSignature)){responseMap.fitBounds(points,{padding:[45,45],maxZoom:14});lastFitSignature=signature;}
+ if(changedRequest||(points.length>1&&signature!==lastFitSignature)){responseMap.fitBounds(points,{padding:[45,45],maxZoom:14,animate:false});lastFitSignature=signature;}
  currentMappedRequest=r.id;mappedSignature=signature;
 }
 function clearMappedRequest(){if(assignmentLayer)assignmentLayer.clearLayers();currentMappedRequest='';mappedSignature='';lastFitSignature='';}
@@ -31,7 +143,7 @@ function selectLocation(lat,lon,pan=false,writeFields=true){
  if(writeFields){mapElement('latitude').value=Number(lat).toFixed(6);mapElement('longitude').value=Number(lon).toFixed(6);}
  if(!responseMap)return;
  selectionLayer.clearLayers();pin([lat,lon],'selection','Selected location').addTo(selectionLayer);
- if(pan)responseMap.setView([lat,lon],12);
+ if(pan)responseMap.setView([lat,lon],12,{animate:false});
 }
 function setupLocation(){
  mapElement('use-location').onclick=()=>{
@@ -62,7 +174,7 @@ async function initializeMap(){
  if(!window.L){mapElement('map-note').textContent='Map library unavailable. Manual coordinates and device location still work.';return;}
  responseMap=L.map('map',{scrollWheelZoom:false}).setView([12.9,77.6],12);
  selectionLayer=L.layerGroup().addTo(responseMap);assignmentLayer=L.layerGroup().addTo(responseMap);
- const initial=locationInput();selectLocation(initial.latitude,initial.longitude);
+ const initial=locationInput();selectLocation(initial.latitude,initial.longitude);setupRecords();
  responseMap.on('click',e=>selectLocation(Math.max(-90,Math.min(90,e.latlng.lat)),((e.latlng.lng+180)%360+360)%360-180));
  if(typeof ResizeObserver!=='undefined')new ResizeObserver(()=>responseMap.invalidateSize({pan:false})).observe(mapElement('map'));
  try{

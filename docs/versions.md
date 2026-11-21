@@ -29,7 +29,7 @@ Leaflet1.9.4 stable is vendored from the version-pinned npm distribution with it
 - leaflet.js SHA256: db49d009c841f5ca34a888c96511ae936fd9f5533e90d8b2c4d57596f4e5641a
 - leaflet.css SHA256: a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6
 
-Current manifests use day4 application/migration tags. Schema version6 adds durable notifications. Earlier Day2/Day3 resource statements above are historical; two-worker deployment was demonstrated in Day3, with Day 4 regression evidence recorded separately.
+The Day 4 manifests used day4 application/migration tags. Schema version6 adds durable notifications. Earlier Day2/Day3 resource statements above are historical; two-worker deployment was demonstrated in Day3, with Day 4 regression evidence recorded separately.
 
 ## Final acceptance environment
 
@@ -37,4 +37,4 @@ The15–16 November rehearsal used Docker Engine29.9.1, the same pinned applicat
 
 ## Expanded matching revision
 
-Current manifests use `expanded` application/migration tags and schema 7 (persisted matching search progress). Go, PostgreSQL/PostGIS, RabbitMQ and Leaflet dependency versions remain unchanged. The Day 4/schema 6 and final-acceptance descriptions above identify previous milestones. See the 18–19 November entry in [evidence](evidence-index.md) for current validation and data-preservation checks.
+The November 18–19 deployment used `expanded` application/migration tags and schema 7 (persisted matching search progress). Go, PostgreSQL/PostGIS, RabbitMQ and Leaflet dependency versions remain unchanged. The Day 4/schema 6 and final-acceptance descriptions above identify previous milestones. See the 18–19 November entry in [evidence](evidence-index.md) for that release’s validation and data-preservation checks. Schema 8 adds registration ordering. Schema 9 adds automatic matching checks and maps saved search positions to the 4,000 km limit.

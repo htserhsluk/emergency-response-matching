@@ -41,7 +41,8 @@ func serveResources(w http.ResponseWriter, r *http.Request, store Requests, part
 		}
 		result, err = s.Search(r.Context(), q)
 	} else if len(parts) == 1 && parts[0] == "resources" && r.Method == "GET" {
-		q := contracts.ListQuery{Limit: 20, After: r.URL.Query().Get("after"), Status: r.URL.Query().Get("status")}
+		params := r.URL.Query()
+		q := contracts.ListQuery{Limit: 20, After: params.Get("after"), Status: params.Get("status"), Sort: params.Get("sort"), Type: params.Get("type")}
 		if v := r.URL.Query().Get("limit"); v != "" {
 			q.Limit, err = strconv.Atoi(v)
 		}
@@ -141,7 +142,8 @@ func (c *Client) SetResourceStatus(ctx context.Context, id, key, status string) 
 	return
 }
 func (c *Client) ListResources(ctx context.Context, q contracts.ListQuery) (out contracts.ResourcePage, err error) {
-	err = c.exchange(ctx, "GET", "/resources?limit="+strconv.Itoa(q.Limit)+"&after="+url.QueryEscape(q.After)+"&status="+url.QueryEscape(q.Status), "", nil, &out)
+	params := url.Values{"limit": {strconv.Itoa(q.Limit)}, "after": {q.After}, "status": {q.Status}, "type": {q.Type}, "sort": {q.Sort}}
+	err = c.exchange(ctx, "GET", "/resources?"+params.Encode(), "", nil, &out)
 	return
 }
 func (c *Client) Search(ctx context.Context, q contracts.SearchQuery) (out []contracts.Candidate, err error) {

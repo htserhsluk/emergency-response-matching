@@ -31,6 +31,9 @@ func (r *Router) BeginIntent(ctx context.Context, c contracts.IntentCommand) (co
 	if err != nil {
 		return contracts.Intent{}, err
 	}
+	if c.DistanceMeters > contracts.MaxMatchDistanceMeters {
+		return contracts.Intent{}, contracts.ErrInvalid
+	}
 	if err = r.validateCandidate(ctx, request, c); err != nil {
 		return contracts.Intent{}, err
 	}
@@ -61,15 +64,18 @@ func (r *Router) Reserve(ctx context.Context, c contracts.ReserveCommand) (contr
 	if err = r.validateCandidate(ctx, request, intent.IntentCommand); err != nil {
 		return contracts.ReservationResult{}, err
 	}
-	return r.reserveResource(ctx, c)
+	return r.reserveResource(ctx, c, intent.DistanceMeters > contracts.MaxMatchDistanceMeters)
 }
-func (r *Router) reserveResource(ctx context.Context, c contracts.ReserveCommand) (contracts.ReservationResult, error) {
+func (r *Router) reserveResource(ctx context.Context, c contracts.ReserveCommand, settleOnly bool) (contracts.ReservationResult, error) {
 	if c.Validate() != nil {
 		return contracts.ReservationResult{}, contracts.ErrInvalid
 	}
 	n, err := r.node(c.ResourceID)
 	if err != nil {
 		return contracts.ReservationResult{}, err
+	}
+	if settleOnly {
+		return n.SettleReservation(ctx, c)
 	}
 	return n.Reserve(ctx, c)
 }

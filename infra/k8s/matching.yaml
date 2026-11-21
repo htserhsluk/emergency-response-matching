@@ -37,7 +37,7 @@
             "containers": [
               {
                 "name": "matching",
-                "image": "erm-matching:expanded",
+                "image": "erm-matching:map-v9",
                 "imagePullPolicy": "Never",
                 "env": [
                   {
