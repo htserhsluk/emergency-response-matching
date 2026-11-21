@@ -34,7 +34,7 @@ Typed `/internal/data/request:{id}` and `resource:{id}` provide safe CRUD; delet
 
 `GET /resources?status=ALLOCATED&sort=allocated` pages through the latest 50 allocations across the three shards. New allocations use the timestamp saved with the successful reservation. Older allocations use their recorded confirmation time when available. Undated rows follow dated rows, and descending resource ID breaks ties. Each page is drawn from the current top 50. Older records remain available through individual lookups.
 
-`GET /resources/{id}` returns the saved resource, its registration time when known, and its assigned request ID when allocated. For new allocations it returns `allocatedAt`. Older records can carry `allocationConfirmedAt` when the request shard has confirmation evidence.
+`GET /resources/{id}` returns the saved resource, its registration time when known, and its assigned request ID when allocated. For new allocations it returns `allocatedAt`. Older records can carry `allocationConfirmedAt` when the request shard has confirmation evidence. If that lookup temporarily fails, the resource remains available and includes `allocationConfirmationUnavailable: true`. A successful lookup with no recorded evidence omits both fields.
 
 `GET /map/locations?type=WATER` returns pages of up to 100 saved request and resource locations for the specified type. Use `type=ALL` for every assistance type. Each record is returned with kind, ID, location and status. Supply the returned `next` as `after` to continue.
 

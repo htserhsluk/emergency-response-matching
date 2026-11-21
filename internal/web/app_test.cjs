@@ -5,7 +5,7 @@ const vm=require('node:vm');
 
 function resourceHarness(){
  const elements=new Map(),waiting=[];
- const element=()=>({value:'',disabled:false,hidden:false,textContent:'',children:[],classList:{toggle(){}},append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;},reportValidity(){return true;},setAttribute(){},addEventListener(){}});
+ const element=()=>({value:'',disabled:false,hidden:false,textContent:'',children:[],classList:{toggle(){}},append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;},showModal(){this.open=true;},focus(){},contains(){return false;},get firstElementChild(){return this.children[0];},reportValidity(){return true;},setAttribute(){},addEventListener(){}});
  const context=vm.createContext({document:{getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element},crypto:{randomUUID:()=> 'fixture-operation-key'},AbortSignal:{timeout:()=>undefined},setTimeout(){},clearTimeout(){},fetch(path){return new Promise(resolve=>waiting.push({path,resolve}));}});
  vm.runInContext(fs.readFileSync(__dirname+'/app.js','utf8'),context);
  return {context,elements,waiting,reply(i,id){waiting[i].resolve({ok:true,json:async()=>({items:[{id,type:'WATER',status:'AVAILABLE',availability:true,location:{latitude:0,longitude:0}}]})});}};
@@ -48,11 +48,18 @@ test('allocation history pages keep allocation sort and show known times in deta
  assert.deepEqual(Object.fromEntries(url.searchParams),{sort:'allocated',limit:'20',after:'cursor/abc',status:'ALLOCATED'});
  h.waiting[1].resolve({ok:true,json:async()=>({items:[record]})});
  await next;
- vm.runInContext('renderResourceDetails('+JSON.stringify(record)+')',h.context);
- const fields=h.elements.get('resource-dialog-fields').children.map(node=>node.textContent);
- assert.ok(fields.includes('Allocated'));
- assert.ok(fields.includes('Allocation confirmed'));
- assert.ok(fields.includes('owner'));
+ const reader=h.elements.get('resource-list').children[0].onclick();
+ h.waiting[2].resolve({ok:true,json:async()=>record});
+ await new Promise(setImmediate);
+ assert.equal(h.waiting[3].path,'/requests/owner');
+ const request={id:'owner',type:'WATER',details:'Needed water',status:'COMPLETED',location:{latitude:2,longitude:3},assignedResourceId:record.id,assignment:{resourceId:record.id,distanceMeters:0}};
+ h.waiting[3].resolve({ok:true,json:async()=>request});
+ await reader;
+ const sections=h.elements.get('resource-dialog-fields').children;
+ assert.deepEqual(sections.map(s=>s.children[0].textContent),['Resource','Matched request','Assignment']);
+ const fields=sections.flatMap(s=>s.children[1].children.map(node=>node.textContent));
+ for(const value of ['Allocated','Needed water','owner','0 metres'])assert.ok(fields.includes(value),value);
+ assert.ok(!fields.includes('Allocation confirmed'));
  assert.equal(h.elements.get('resource-dialog-actions').children.length,0);
 });
 
@@ -104,4 +111,52 @@ test('repeating lookup during an in-flight refresh leaves one polling loop',asyn
  for(const resolve of waiting)resolve({ok:true,json:async()=>({id,status:'PENDING',type:'WATER',details:'fixture',location:{latitude:0,longitude:0}})});
  await new Promise(setImmediate);await new Promise(setImmediate);
  assert.equal(timers.size,1,'old in-flight lookup must not schedule another permanent poll');
+});
+
+test('request entry retries a failed linked lookup and keeps newer records when older responses arrive',async()=>{
+ const h=resourceHarness();
+ const request={kind:'request',id:'first',type:'WATER',status:'ASSIGNED',assignedResourceId:'supply',assignment:{resourceId:'supply',distanceMeters:13},details:'Drinking water',location:{latitude:1,longitude:2}};
+ h.context.request=request;
+ const first=vm.runInContext("openRecordDetails(request,document.getElementById('open'))",h.context);
+ h.waiting[0].resolve({ok:true,json:async()=>request});
+ await new Promise(setImmediate);
+ assert.equal(h.waiting[1].path,'/resources/supply');
+ h.waiting[1].resolve({ok:false,status:503,json:async()=>({message:'Shard offline'})});
+ await first;
+ assert.equal(h.elements.get('record-detail-retry').hidden,false);
+ assert.match(h.elements.get('resource-dialog-feedback').textContent,/resource/i);
+ const retry=h.elements.get('record-detail-retry').onclick();
+ await new Promise(setImmediate);
+ h.waiting[2].resolve({ok:true,json:async()=>request});
+ await new Promise(setImmediate);
+ const later=vm.runInContext("openRecordDetails({kind:'request',id:'later',type:'FOOD'},document.getElementById('another'))",h.context);
+ h.waiting[4].resolve({ok:true,json:async()=>({id:'later',type:'FOOD',status:'PENDING',details:'Newer request',location:{latitude:3,longitude:4}})});
+ await later;
+ h.waiting[3].resolve({ok:true,json:async()=>({id:'supply',type:'WATER',status:'ALLOCATED',assignedRequestId:'first',location:{latitude:0,longitude:0}})});
+ await retry;
+ const sections=h.elements.get('resource-dialog-fields').children;
+ assert.deepEqual(sections.map(s=>s.children[0].textContent),['Request']);
+ assert.ok(sections[0].children[1].children.some(n=>n.textContent==='Newer request'));
+});
+
+test('failed history lookup still checks its linked request, and Retry keeps confirmed fields visible',async()=>{
+ const h=resourceHarness(),record={kind:'resource',id:'supply',type:'WATER',status:'ALLOCATED',assignedRequestId:'owner',allocationConfirmedAt:'2026-05-03T18:01:00Z'};
+ const req={id:'owner',type:'WATER',status:'ASSIGNED',assignedResourceId:'supply',details:'Keep this description',assignment:{resourceId:'supply',distanceMeters:0}};
+ h.context.record=record;
+ const opened=vm.runInContext("openRecordDetails(record,document.getElementById('open'))",h.context);
+ h.waiting[0].resolve({ok:false,status:503,json:async()=>({message:'Shard unavailable'})});
+ await new Promise(setImmediate);
+ assert.equal(h.waiting[1]?.path,'/requests/owner');
+ h.waiting[1].resolve({ok:true,json:async()=>req});await opened;
+ function all(){return h.elements.get('resource-dialog-fields').children.flatMap(s=>s.children[1].children.map(n=>n.textContent));}
+ assert.ok(all().includes('Keep this description'));
+ assert.ok(all().includes('Allocation confirmed'));
+ assert.ok(!all().includes('Allocated'));
+ const retry=h.elements.get('record-detail-retry').onclick();
+ assert.ok(all().includes('Keep this description'));
+ h.waiting[2].resolve({ok:true,json:async()=>record});await new Promise(setImmediate);
+ h.waiting[3].resolve({ok:false,status:503,json:async()=>({message:'Request unavailable'})});await retry;
+ assert.ok(all().includes('Keep this description'));
+ assert.ok(all().includes('0 metres'));
+ assert.equal(h.elements.get('record-detail-retry').hidden,false);
 });

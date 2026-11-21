@@ -52,84 +52,167 @@ function resourceRow(r){
  button.id='resource-entry-'+r.id;
  button.setAttribute('aria-haspopup','dialog');
  button.append(el('strong',resourceName(r)),el('span',r.id));
- button.onclick=()=>openResourceDetails(r,button);
+ button.onclick=()=>openRecordDetails({...r,kind:'resource'},button);
  return button;
 }
-let detailResource=null, detailOpener=null, detailRead=0;
+let recordView=null, detailRead=0;
 function availabilityControl(r){
  const button=el('button',r.availability?'Mark unavailable':'Mark available','secondary');
  button.onclick=()=>action(button,async()=>{
-  if(detailResource?.id===r.id)++detailRead;
   let updated;
   try{
    updated=await api('/resources/'+r.id+'/status','PUT',{status:r.availability?'UNAVAILABLE':'AVAILABLE'});
   }catch(error){
-   if(detailResource?.id===r.id)$('resource-dialog-feedback').textContent=error.message;
+   if(recordView?.resource?.id===r.id)$('resource-dialog-feedback').textContent=error.message;
    throw error;
   }
   if(createdResource?.id===updated.id)showCreatedResource(updated);
-  if(detailResource?.id===updated.id){
-   renderResourceDetails(updated);
+  if(recordView?.resource?.id===updated.id){
+   ++detailRead;
+   recordView.resource=updated;
+   recordView.pending=null;
+   recordView.errors={};
+   renderRecordDetails(recordView);
+   $('record-detail-retry').hidden=true;
    $('resource-dialog-feedback').textContent='Resource availability updated.';
-   $('resource-dialog-actions').firstElementChild?.focus();
+   ($('resource-dialog-actions').firstElementChild||$('resource-dialog-close')).focus();
   }
   message('Resource availability updated.');
   await resources();
  });
  return button;
 }
-function renderResourceDetails(r){
- detailResource=r;
- $('resource-dialog-title').textContent=resourceName(r);
- const fields=$('resource-dialog-fields');
- fields.replaceChildren();
- function field(label,value){fields.append(el('dt',label),el('dd',value));}
- field('Resource ID',r.id);
- field('Assistance type',r.type);
- field('Status',r.status);
- field('Available for matching',r.availability?'Yes':'No');
- field('Latitude',String(r.location.latitude));
- field('Longitude',String(r.location.longitude));
- field('Registered',r.registeredAt?new Date(r.registeredAt).toLocaleString():'Unknown');
- if(r.status==='ALLOCATED'){
-  field('Assigned request ID',r.assignedRequestId||'Unknown');
-  field('Allocated',r.allocatedAt?new Date(r.allocatedAt).toLocaleString():'Unknown');
-  if(r.allocationConfirmedAt)field('Allocation confirmed',new Date(r.allocationConfirmedAt).toLocaleString());
- }
- const actions=$('resource-dialog-actions');
- actions.replaceChildren();
- if(r.status!=='ALLOCATED')actions.append(availabilityControl(r));
+function detailSection(kind,title,rows){
+ const section=el('section','');
+ section.setAttribute('data-detail',kind);
+ const fields=el('dl','');
+ for(const [label,value] of rows)fields.append(el('dt',label),el('dd',String(value)));
+ section.append(el('h3',title),fields);
+ return section;
 }
-async function openResourceDetails(r,button){
+function renderRecordDetails(view){
+ const {resource,request,pair,kind}=view;
+ const fields=$('resource-dialog-fields'),actions=$('resource-dialog-actions');
+ function missing(entity){
+  if(view.pending===entity)return 'Loading…';
+  return view.errors[entity]?'Temporarily unavailable':'Not recorded';
+ }
+ function time(value,fallback){return value?new Date(value).toLocaleString():fallback;}
+ const sections=[];
+ if(kind==='resource'||pair){
+  const absent=missing('resource');
+  sections.push(detailSection('resource','Resource',[
+   ['Resource ID',resource?.id||request?.assignedResourceId||absent],['Assistance type',resource?.type??absent],
+   ['Status',resource?.status??absent],['Available for matching',resource?.availability==null?absent:(resource.availability?'Yes':'No')],
+   ['Latitude',resource?.location?.latitude??request?.assignment?.location?.latitude??absent],
+   ['Longitude',resource?.location?.longitude??request?.assignment?.location?.longitude??absent],['Registered',time(resource?.registeredAt,absent)]
+  ]));
+ }
+ if(kind==='request'||pair){
+  const absent=missing('request');
+  const rows=[['Request ID',request?.id||resource?.assignedRequestId||absent],['Description',request?.details??absent],['Assistance type',request?.type??absent],
+   ['Status',request?.status??absent],['Latitude',request?.location?.latitude??absent],['Longitude',request?.location?.longitude??absent],['Created',time(request?.createdAt,absent)]];
+  if(request?.matching){
+   rows.push(['Matching state',request.matching.state],['Search radius',request.matching.radiusMeters+' metres']);
+   if(request.matching.reason)rows.push(['Matching reason',request.matching.reason]);
+  }
+  if(request?.generation!=null)rows.push(['Generation',request.generation]);
+  sections.push(detailSection('request',pair?'Matched request':'Request',rows));
+ }
+ if(pair||resource?.assignedRequestId){
+  const distance=pair?request?.assignment?.distanceMeters:null;
+  const rows=pair?
+   [['Assigned resource ID',resource?.id||request.assignedResourceId],['Matched request ID',request?.id||resource.assignedRequestId],
+    ['Saved distance',distance==null?missing('request'):distance+' metres']]:
+   [['Reserved resource ID',resource.id],['Linked request ID',resource.assignedRequestId]];
+  if(resource?.allocatedAt)rows.push(['Allocated',time(resource.allocatedAt)]);
+  else if(resource?.allocationConfirmedAt)rows.push(['Allocation confirmed',time(resource.allocationConfirmedAt)]);
+  else if(resource?.allocationConfirmationUnavailable)rows.push(['Allocation confirmed','Temporarily unavailable']);
+  else rows.push(['Allocation time',missing('resource')]);
+  sections.push(detailSection('assignment',pair?'Assignment':'Reservation',rows));
+ }
+ fields.replaceChildren(...sections);
+ const primary=view[kind];
+ const typeName=primary?.type?primary.type.charAt(0)+primary.type.slice(1).toLowerCase()+' ':'';
+ $('resource-dialog-title').textContent=pair?'Assignment details':typeName+kind;
+ actions.replaceChildren();
+ if(kind==='resource'&&resource?.status&&resource.status!=='ALLOCATED'&&typeof resource.availability==='boolean'){
+  const button=availabilityControl(resource);
+  button.disabled=!!view.pending||!!view.errors.resource;
+  actions.append(button);
+ }
+}
+async function loadRecordDetails(view){
  const sequence=++detailRead;
- detailOpener=button;
- renderResourceDetails(r);
- const feedback=$('resource-dialog-feedback');
- const initialAction=$('resource-dialog-actions').firstElementChild;
- if(initialAction)initialAction.disabled=true;
+ const feedback=$('resource-dialog-feedback'),retry=$('record-detail-retry');
+ const other=view.kind==='resource'?'request':'resource';
+ retry.hidden=true;
  feedback.textContent='Checking current details.';
- $('resource-dialog').showModal();
- try{
-  const current=await api('/resources/'+r.id);
-  if(sequence!==detailRead)return;
-  const actionFocused=$('resource-dialog-actions').contains(document.activeElement);
-  renderResourceDetails(current);
-  feedback.textContent='';
-  if(actionFocused)($('resource-dialog-actions').firstElementChild||$('resource-dialog-close')).focus();
- }catch(error){
-  if(sequence===detailRead){
-   feedback.textContent='Showing the last loaded details. '+error.message;
-   if(initialAction)initialAction.disabled=false;
+ async function refresh(kind,id){
+  view.pending=kind;
+  renderRecordDetails(view);
+  try{
+   const current=await api('/'+kind+'s/'+encodeURIComponent(id));
+   if(sequence!==detailRead)return;
+   delete view.errors[kind];
+   const previous=view[kind];
+   if(current.allocationConfirmationUnavailable && previous?.assignedRequestId===current.assignedRequestId && previous?.allocationConfirmedAt){
+    current.allocationConfirmedAt=previous.allocationConfirmedAt;
+   }
+   view[kind]=current;
+  }catch(error){
+   if(sequence===detailRead)view.errors[kind]=error.message;
   }
  }
+ await refresh(view.kind,view.id);
+ if(sequence!==detailRead)return;
+ const primary=view[view.kind];
+ const linked=view.kind==='resource'?primary.assignedRequestId:
+  (['ASSIGNED','COMPLETED'].includes(primary.status)&&primary.assignedResourceId);
+ if(view[other]?.id!==linked){
+  if(!linked||view[other])delete view.errors[other];
+  view[other]=null;
+  view.pair=false;
+ }
+ if(linked){
+  // A finalized request names the resource even when that shard is offline.
+  if(view.kind==='request')view.pair=true;
+  await refresh(other,linked);
+  if(sequence!==detailRead)return;
+  const {resource,request}=view;
+  if(resource&&request)view.pair=resource.assignedRequestId===request.id&&request.assignedResourceId===resource.id&&
+   ['ASSIGNED','COMPLETED'].includes(request.status)&&(!request.assignment||request.assignment.resourceId===resource.id);
+ }
+ view.pending=null;
+ const messages=Object.entries(view.errors).map(([entity,error])=>'Could not load current '+entity+' details. '+error);
+ if(view.resource?.allocationConfirmationUnavailable)messages.push('Allocation confirmation time is temporarily unavailable.');
+ if(linked&&!view.pair&&!view.errors[other])messages.push('The linked records do not currently confirm this assignment.');
+ feedback.textContent=messages.join(' ');
+ retry.hidden=messages.length===0;
+ renderRecordDetails(view);
 }
+function openRecordDetails(record,opener,restoreFocus){
+ const view={kind:record.kind,id:record.id,opener,restoreFocus,errors:{},[record.kind]:record};
+ recordView=view;
+ const dialog=$('resource-dialog');
+ if(!dialog.open)dialog.showModal();
+ return loadRecordDetails(view);
+}
+$('record-detail-retry').onclick=()=>{
+ if(!recordView)return;
+ $('resource-dialog-close').focus();
+ return loadRecordDetails(recordView);
+};
 $('resource-dialog-close').onclick=()=>$('resource-dialog').close();
 $('resource-dialog').onclose=()=>{
+ if($('resource-dialog').open)return;
  ++detailRead;
- const target=detailOpener?.isConnected?detailOpener:$(detailOpener?.id)||$('resource-filter');
- detailOpener=null;
- detailResource=null;
- target.focus();
+ const view=recordView;
+ recordView=null;
+ if(!view)return;
+ if(view.restoreFocus){view.restoreFocus();return;}
+ const target=view.opener?.isConnected?view.opener:$(view.opener?.id)||$('resource-filter');
+ target.focus({preventScroll:true});
 };
 function showCreatedResource(r){
  ++createdRefresh;
