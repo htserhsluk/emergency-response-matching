@@ -1,4 +1,5 @@
 . "$PSScriptRoot/k8s-common.ps1"
+. "$PSScriptRoot/recovery-journal.ps1"
 . "$PSScriptRoot/fixture-requests.ps1"
 $api=$null;$control=$null;$paused=$false;$restorePair=$false
 try {
@@ -49,7 +50,9 @@ try {
     if(!$refused -or (Kube-Sql $standby 'SELECT pg_is_in_recovery()') -ne 't'){throw 'Stale standby was promoted'}
     if((Kube get "statefulset/node-$primary" -o 'jsonpath={.spec.replicas}') -ne '0'){throw 'Old primary was not fenced'}
     Kube-Sql $standby 'SELECT pg_wal_replay_resume()'|Out-Null;$paused=$false
-    $journal=Get-Content ".local/recovery/k8s-0-$from-v$($route.version).json" -Raw|ConvertFrom-Json
+    $systemId=Kube-Sql $standby 'SELECT system_identifier FROM pg_control_system()'
+    $journalPath=Get-KubeJournalPath '.local/recovery' $systemId 0 $from $route.version
+    $journal=Get-Content -LiteralPath $journalPath -Raw|ConvertFrom-Json
     Kube-Wait {(Kube-Sql $standby "SELECT pg_last_wal_replay_lsn()>='$($journal.lsn)'::pg_lsn") -eq 't'} 'catch-up to fenced primary WAL'
     & "$PSScriptRoot/k8s-failover.ps1" -Shard 0 -From $from
     & "$PSScriptRoot/k8s-rejoin.ps1" -Shard 0 -Target $from

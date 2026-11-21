@@ -4,7 +4,7 @@ const os=require('node:os');
 const {spawn}=require('node:child_process');
 const {setTimeout:delay}=require('node:timers/promises');
 
-const chrome=[process.env.CHROME_BIN,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/chromium','/usr/bin/google-chrome'].find(file=>file&&fs.existsSync(file));
+const chrome=[process.env.CHROME_BIN,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].find(file=>file&&fs.existsSync(file));
 async function until(check){
  const deadline=Date.now()+15000;
  while(Date.now()<deadline){const value=await check();if(value)return value;await delay(50);}
@@ -13,18 +13,34 @@ async function until(check){
 
 async function launch(t){
  const profile=fs.mkdtempSync(path.join(os.tmpdir(),'erm-web-test-'));
- const browser=spawn(chrome,['--headless','--disable-background-networking','--disable-extensions','--disable-gpu','--no-first-run','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:'ignore',windowsHide:true});
- const closed=new Promise(resolve=>browser.once('exit',resolve));
+ const browser=spawn(chrome,['--headless','--disable-background-networking','--disable-extensions','--disable-gpu','--no-first-run','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:['ignore','ignore','pipe'],windowsHide:true});
+ const closed=new Promise(resolve=>browser.once('close',resolve));
+ let diagnostics='';
+ browser.stderr.setEncoding('utf8');
+ const endpoint=new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>reject(Error('Chromium startup timed out: '+diagnostics)),30000);
+  function finish(error,port){
+   clearTimeout(timer);
+   if(error)reject(error);else resolve(port);
+  }
+  browser.on('error',error=>finish(error));
+  browser.once('close',(code,signal)=>finish(Error('Chromium exited during startup ('+(signal??code)+'): '+diagnostics)));
+  browser.stderr.on('data',chunk=>{
+   diagnostics=(diagnostics+chunk).slice(-8192);
+   const listening=diagnostics.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//);
+   if(listening)finish(null,listening[1]);
+  });
+ });
  t.after(async()=>{
   browser.kill();await closed;
   try{fs.rmSync(profile,{recursive:true,force:true,maxRetries:3});}catch(error){if(!['EPERM','EBUSY','ENOTEMPTY'].includes(error.code))throw error;}
  });
- const port=await until(()=>{
-  try{return fs.readFileSync(path.join(profile,'DevToolsActivePort'),'utf8').split('\n')[0];}
-  catch(error){if(!['ENOENT','EBUSY'].includes(error.code))throw error;return false;}
+ const port=await endpoint;
+ const page=await until(async()=>{
+  const response=await fetch('http://127.0.0.1:'+port+'/json/list');
+  return (await response.json()).find(item=>item.type==='page'&&item.webSocketDebuggerUrl);
  });
- const pages=await (await fetch('http://127.0.0.1:'+port+'/json/list')).json();
- const socket=new WebSocket(pages.find(p=>p.type==='page').webSocketDebuggerUrl);
+ const socket=new WebSocket(page.webSocketDebuggerUrl);
  await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
  t.after(()=>socket.close());
  let sequence=0;
