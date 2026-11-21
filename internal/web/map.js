@@ -8,7 +8,7 @@ const pointOf=location=>[location.latitude,location.longitude];
 function pin(point,kind,label,options={}){
  const symbols={selection:'◆',request:'R',resource:'+',candidate:'?',assigned:'✓'};
  const icon=L.divIcon({className:'location-pin '+kind,html:'<span>'+(options.rank||symbols[kind])+'</span>',iconSize:[32,40],iconAnchor:[16,40],tooltipAnchor:[0,-32]});
- const marker=L.marker(point,{icon,title:label,alt:label,interactive:!!options.select,keyboard:!!options.select,zIndexOffset:options.priority||0});
+ const marker=L.marker(point,{icon,title:label,alt:label,recordKey:options.recordKey,autoPanOnFocus:false,interactive:!!options.select,keyboard:!!options.select,zIndexOffset:options.priority||0});
  if(options.select)marker.on('click',options.select);
  return marker.bindTooltip(label);
 }
@@ -21,52 +21,39 @@ const recordKey=r=>r.kind+'/'+r.id;
 const typeName=type=>type?type.charAt(0)+type.slice(1).toLowerCase():'Saved';
 const recordLabel=r=>typeName(r.type)+' '+r.kind;
 const mapIncludes=type=>mapElement('map-type').value==='ALL'||mapElement('map-type').value===type;
-let popupVersion=0;
-function popupContent(record,notice=''){
- const box=document.createElement('div');
- box.className='record-popup';
- const title=document.createElement('strong');title.textContent=recordLabel(record);box.append(title);
- const fields=[
-  ['ID',record.id],['Assistance type',record.type],['Status',record.status],
-  ['Coordinates',pointOf(record.location).join(', ')],['Details',record.details],
-  ['Available',record.availability],['Created',record.createdAt],['Updated',record.updatedAt],
-  ['Registered',record.registeredAt],['Allocated',record.allocatedAt],['Allocation confirmed',record.allocationConfirmedAt],['Generation',record.generation],
-  ['Assigned resource',record.assignedResourceId||record.assignment?.resourceId],['Assigned request',record.assignedRequestId],
-  ['Distance (m)',record.distanceMeters??record.assignment?.distanceMeters],
-  ['Matching',record.matching?.state],['Search radius (m)',record.matching?.radiusMeters],
-  ['Assignment coordinates',record.assignment?.location&&pointOf(record.assignment.location).join(', ')]
- ];
- for(const [label,value] of fields){
-  if(value===undefined||value===null||value==='')continue;
-  const line=document.createElement('div');line.textContent=label+': '+value;box.append(line);
+function restorePinFocus(key){
+ for(const group of [recordsLayer,detailLayer,assignmentLayer]){
+  const marker=group.getLayers().find(layer=>layer.options?.recordKey===key);
+  const element=marker?.getElement();
+  if(element){element.focus({preventScroll:true});return;}
  }
- if(notice){const line=document.createElement('div');line.textContent=notice;box.append(line);}
- return box;
-}
-async function showRecordPopup(r){
- const version=++popupVersion;
- const popup=L.popup({autoPan:false,maxWidth:280,maxHeight:230,offset:[0,-36]})
-  .setLatLng(pointOf(r.location)).setContent(popupContent(r)).openOn(responseMap);
- try{
-  const full=await api('/'+r.kind+'s/'+encodeURIComponent(r.id));
-  if(version===popupVersion)popup.setContent(popupContent({...r,...full}));
- }catch(e){if(version===popupVersion)popup.setContent(popupContent(r,'Additional details temporarily unavailable.'));}
+ mapElement('map-record').focus({preventScroll:true});
 }
 function savedPin(record,style=record.kind,options={}){
- return pin(pointOf(record.location),style,recordLabel(record),{...options,select:()=>{
-  if(options.inspect)inspectRecord(record);
-  showRecordPopup(record);
- }});
+ const key=recordKey(record),label=recordLabel(record);
+ const open=()=>openRecordDetails(record,marker.getElement(),()=>restorePinFocus(key));
+ const marker=pin(pointOf(record.location),style,label,{...options,recordKey:key,select:open});
+ marker.on('add',()=>{
+  const element=marker.getElement();
+  element.setAttribute('aria-label',label);
+  element.setAttribute('aria-haspopup','dialog');
+  element.addEventListener('keydown',event=>{
+   if(event.key!=='Enter'&&event.key!==' ')return;
+   event.preventDefault();event.stopPropagation();
+   if(!event.repeat)open();
+  });
+ });
+ return marker;
 }
 function drawOverview(fit=false){
  recordsLayer.clearLayers();
- for(const r of records.values())savedPin(r,r.kind,{inspect:true,priority:100}).addTo(recordsLayer);
+ for(const r of records.values())savedPin(r,r.kind,{priority:100}).addTo(recordsLayer);
  if(fit&&records.size)responseMap.fitBounds([...records.values()].map(r=>pointOf(r.location)),{padding:[40,45],maxZoom:14,animate:false});
 }
 function clearInspection(){
- ++detailVersion;++popupVersion;++selectionRevision;
+ ++detailVersion;++selectionRevision;
  inspected=null;detailSignature='';detailFit='';
- responseMap.closePopup();detailLayer.clearLayers();clearMappedRequest();selectionLayer.clearLayers();
+ detailLayer.clearLayers();clearMappedRequest();selectionLayer.clearLayers();
  mapElement('map-record').value='';
  mapElement('map-detail').textContent='';
 }

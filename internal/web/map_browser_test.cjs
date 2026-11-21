@@ -22,20 +22,20 @@ test('Leaflet marker tips stay on saved coordinates through zoom and resize',{sk
  const probe=`<script>
  const fixture=${JSON.stringify(records)},[water,need,medicine]=fixture;
  const sendResult=window.fetch.bind(window);
- let assigned=false;
+ let assigned=false,overviewChanged=false;
  const candidate={id:need.id,location:need.location,distanceMeters:250};
  window.fetch=async path=>{
   const url=new URL(path,location.href),route=url.pathname;
   let body={items:[]};
   if(route==='/map/locations'){
    const type=url.searchParams.get('type');
-   body={items:fixture.filter(r=>r.type===type||type==='ALL')};
+   body={items:fixture.filter(r=>r.type===type||type==='ALL').map(r=>r.id===water.id&&overviewChanged?{...r,status:'UNAVAILABLE'}:r)};
   }else if(route.endsWith('/candidates')){
    body=assigned?{items:[],assignedRequest:candidate}:{items:[candidate]};
   }else if(route==='/requests/'+need.id){
    body={...need,details:'Drinking water for the clinic',generation:3,createdAt:'2026-11-20T12:00:00Z'};
    if(assigned)Object.assign(body,{status:'ASSIGNED',assignedResourceId:water.id,assignment:{resourceId:water.id,location:water.location,distanceMeters:250}});
-  }else if(route==='/resources/'+water.id){body={...water,availability:!assigned,registeredAt:'2026-11-20T12:00:00Z',allocatedAt:'2026-11-20T13:00:00Z',allocationConfirmedAt:'2026-11-20T14:00:00Z'};}
+  }else if(route==='/resources/'+water.id){body={...water,status:assigned?'ALLOCATED':'AVAILABLE',assignedRequestId:assigned?need.id:undefined,availability:!assigned,registeredAt:'2026-11-20T12:00:00Z',allocatedAt:'2026-11-20T13:00:00Z',allocationConfirmedAt:'2026-11-20T14:00:00Z'};}
   return {ok:true,json:async()=>body};
  };
  window.addEventListener('load',async()=>{
@@ -50,13 +50,21 @@ test('Leaflet marker tips stay on saved coordinates through zoom and resize',{sk
     const actual=markers().map(node=>node.title).sort();
     check(JSON.stringify(actual)===JSON.stringify(labels.sort()),'Unexpected pins: '+JSON.stringify(actual));
    };
-   const click=async(label)=>{
+   const open=async(label,key)=>{
     const node=markers().find(node=>node.title===label);check(node,'Missing '+label);
     node.dispatchEvent(new MouseEvent('mouseover',{bubbles:true}));
     const tips=[...mapNode.querySelectorAll('.leaflet-tooltip')].map(tip=>tip.textContent);
     check(tips.includes(label),'Hover '+label+' produced '+JSON.stringify(tips));
-    node.dispatchEvent(new MouseEvent('click',{bubbles:true}));await settle();
-    return [...mapNode.querySelectorAll('.leaflet-popup-content')].at(-1)?.textContent||'';
+    if(key){node.focus({preventScroll:true});node.dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true}));}
+    else node.dispatchEvent(new MouseEvent('click',{bubbles:true}));
+    await settle();
+    check(!mapNode.querySelector('.leaflet-popup'),'Unexpected Leaflet popup');
+    const dialog=document.querySelector('dialog[open]');check(dialog,'Missing details dialog');
+    return dialog.textContent;
+   };
+   const close=async(label)=>{
+    const dialog=document.querySelector('dialog[open]');dialog.querySelector('button[autofocus]').click();await settle();
+    check(!dialog.open,'Dialog still open');check(document.activeElement.title===label,'Wrong focus after dismissing '+label);
    };
    await settle();
    check(filter.value==='ALL'&&picker.selectedOptions[0].textContent==='All locations','Wrong default filters');
@@ -65,11 +73,19 @@ test('Leaflet marker tips stay on saved coordinates through zoom and resize',{sk
    await select(creation,'SHELTER');check(filter.value==='WATER','Map filter changed with creation form');
    responseMap.fire('click',{latlng:L.latLng(12.91,77.61)});
    check(markers().some(node=>node.classList.contains('selection')),'Draft point missing');
-   let content=await click('Water resource');
-   for(const text of [water.id,'WATER','AVAILABLE','12.91, 77.61','2026-11-20T12:00:00Z','2026-11-20T13:00:00Z','2026-11-20T14:00:00Z'])check(content.includes(text),'Missing resource detail '+text);
-   checkPins(['Water resource','Water request']);
-   content=await click('Water request');
-   for(const text of [need.id,'WATER','PENDING','12.912, 77.611','Drinking water for the clinic','Generation: 3','2026-11-20'])check(content.includes(text),'Missing candidate detail '+text);
+   const overviewZoom=responseMap.getZoom(),overviewCenter=responseMap.getCenter();
+   let content=await open('Water resource','Enter');
+   for(const text of [water.id,'WATER','AVAILABLE','12.91','77.61'])check(content.includes(text),'Missing resource detail '+text);
+   const oldMarker=markers().find(node=>node.title==='Water resource');
+   overviewChanged=true;await refreshLocations();await settle();
+   check(!oldMarker.isConnected,'Overview marker was not replaced');
+   await close('Water resource');
+   check(picker.value===''&&filter.value==='WATER','Inspecting pin changed overview selection');
+   check(responseMap.getZoom()===overviewZoom&&responseMap.getCenter().equals(overviewCenter),'Inspecting pin moved overview');
+   await select(picker,'resource/'+water.id);checkPins(['Water resource','Water request']);
+   content=await open('Water request',' ');
+   for(const text of [need.id,'WATER','PENDING','12.912','77.611','Drinking water for the clinic'])check(content.includes(text),'Missing candidate detail '+text);
+   await close('Water request');
    let checks=0;
    for(const [zoom,width] of [[8,440],[15,280],[12,520]]){
     mapNode.style.width=width+'px';
@@ -86,14 +102,16 @@ test('Leaflet marker tips stay on saved coordinates through zoom and resize',{sk
     }
    }
    await settle();const center=responseMap.getCenter();
-   assigned=true;await refreshLocations();await settle();
+   await open('Water request');assigned=true;await refreshLocations();await settle();
+   await close('Water request');
+   check(document.activeElement.classList.contains('assigned'),'Focus did not follow candidate to confirmed marker');
    check(responseMap.getZoom()===12&&responseMap.getCenter().equals(center),'Refresh changed zoom/center: '+center+' to '+responseMap.getCenter()+' at '+responseMap.getZoom());
    check(picker.value==='resource/'+water.id,'Refresh changed selection');
    checkPins(['Water resource','Water request']);
    check(mapNode.querySelector('.location-pin.assigned')&&!mapNode.querySelector('.location-pin.candidate'),'Missing confirmed assignment');
-   content=await click('Water request');check(content.includes(water.id)&&content.includes('ASSIGNED'),'Confirmed popup missing assignment');
+   content=await open('Water request');check(content.includes(water.id)&&content.includes('ASSIGNED'),'Confirmed dialog missing assignment');await close('Water request');
    await select(picker,'request/'+need.id);checkPins(['Water request','Water resource']);
-   content=await click('Water resource');check(content.includes(water.id),'Assigned resource popup missing');
+   content=await open('Water resource');check(content.includes(water.id),'Assigned resource dialog missing');await close('Water resource');
    await select(picker,'');checkPins(['Water request','Water resource']);
    await refresh();checkPins(['Water request','Water resource']);
    await select(filter,'ALL');checkPins(['Water resource','Water request','Medicine resource']);

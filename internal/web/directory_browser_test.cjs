@@ -2,17 +2,8 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const os=require('node:os');
 const http=require('node:http');
-const {spawn}=require('node:child_process');
-const {setTimeout:delay}=require('node:timers/promises');
-
-const chrome=[process.env.CHROME_BIN,'C:/Program Files/Google/Chrome/Application/chrome.exe','/usr/bin/chromium','/usr/bin/google-chrome'].find(file=>file&&fs.existsSync(file));
-async function until(check){
- const deadline=Date.now()+15000;
- while(Date.now()<deadline){const value=await check();if(value)return value;await delay(50);}
- throw Error('Browser condition timed out: '+check);
-}
+const {chrome,until,launch}=require('./browser_fixture.cjs');
 
 test('directory dialog supports native keyboard, mouse, availability and focus restoration',{skip:!chrome,timeout:60000},async t=>{
  const id='a'.repeat(32);
@@ -36,44 +27,8 @@ test('directory dialog supports native keyboard, mouse, availability and focus r
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  t.after(()=>{server.closeAllConnections();server.close();});
- const profile=fs.mkdtempSync(path.join(os.tmpdir(),'erm-directory-'));
- const browser=spawn(chrome,['--headless','--disable-background-networking','--disable-extensions','--disable-gpu','--no-first-run','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:'ignore',windowsHide:true});
- const closed=new Promise(resolve=>browser.once('exit',resolve));
- t.after(async()=>{
-  browser.kill();await closed;
-  try{fs.rmSync(profile,{recursive:true,force:true,maxRetries:3});}catch(error){if(!['EPERM','EBUSY','ENOTEMPTY'].includes(error.code))throw error;}
- });
- const port=await until(()=>{
-  try{return fs.readFileSync(path.join(profile,'DevToolsActivePort'),'utf8').split('\n')[0];}
-  catch(error){if(!['ENOENT','EBUSY'].includes(error.code))throw error;return false;}
- });
- const pages=await (await fetch('http://127.0.0.1:'+port+'/json/list')).json();
- const socket=new WebSocket(pages.find(p=>p.type==='page').webSocketDebuggerUrl);
- await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
- t.after(()=>socket.close());
- let sequence=0;
- const pending=new Map();
- socket.onmessage=event=>{
-  const reply=JSON.parse(event.data),wait=pending.get(reply.id);
-  if(wait){pending.delete(reply.id);reply.error?wait.reject(Error(reply.error.message)):wait.resolve(reply.result);}
- };
- function cdp(method,params={}){
-  const id=++sequence;
-  return new Promise((resolve,reject)=>{pending.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params}));});
- }
- async function evaluate(expression){
-  const result=await cdp('Runtime.evaluate',{expression,returnByValue:true});
-  if(result.exceptionDetails)throw Error(result.exceptionDetails.exception.description);
-  return result.result.value;
- }
- async function key(key,code,number){
-  for(const type of ['keyDown','keyUp'])await cdp('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode:number,text:type==='keyDown'&&key==='Enter'?'\r':''});
- }
- async function click(selector){
-  const point=await evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.scrollIntoView({block:'center'});const rect=node.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};})()`);
-  for(const type of ['mousePressed','mouseReleased'])await cdp('Input.dispatchMouseEvent',{type,...point,button:'left',clickCount:1});
- }
- await cdp('Page.navigate',{url:'http://127.0.0.1:'+server.address().port+'/?tiles=off'});
+ const {evaluate,key,click,navigate}=await launch(t);
+ await navigate('http://127.0.0.1:'+server.address().port+'/?tiles=off');
  await until(()=>evaluate("typeof resources==='function'"));
  await click('#resources');
  await until(()=>evaluate("!!document.querySelector('.resource-entry')"));

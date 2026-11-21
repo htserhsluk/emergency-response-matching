@@ -3,17 +3,17 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 function harness(geo,tiles=false,apiOverride){
- const elements=new Map(),groups=[],views=[],timers=new Map();let resize,timerId=0;const tileEvents={};
- const element=()=>({value:'',textContent:'',disabled:false,children:[],append(...nodes){this.children.push(...nodes);},replaceChildren(...nodes){this.children=nodes;},addEventListener(name,fn){this[name]=fn;}});
+ const elements=new Map(),groups=[],views=[],timers=new Map(),dialogs=[];let resize,timerId=0;const tileEvents={};
+ const element=()=>({value:'',textContent:'',disabled:false,children:[],focus(){this.focused=true;},setAttribute(){},append(...nodes){this.children.push(...nodes);},replaceChildren(...nodes){this.children=nodes;},addEventListener(name,fn){this[name]=fn;}});
  const get=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
  get('map-type').value='ALL';get('type').value='WATER';get('latitude').value='12.9';get('longitude').value='77.6';
- const map={setView(p){views.push(p);return this;},fitBounds(p){views.push(p);return this;},on(name,fn){this[name]=fn;return this;},closePopup(){this.popup=null;},invalidateSize(){}};
- const marker=(point,options)=>({point,options,on(event,fn){this[event]=fn;return this;},bindTooltip(label){this.tooltip=label;return this;},addTo(g){g.items.push(this);return this;}});
- const L={popup(){return {setLatLng(){return this;},setContent(content){this.content=content;return this;},openOn(map){map.popup=this;return this;}};},tileLayer(){return {addTo(){if(tileEvents.loading)tileEvents.loading();return this;},on(event,fn){tileEvents[event]=fn;return this;}};},map:()=>map,layerGroup(){const g={items:[],addTo(){groups.push(this);return this;},clearLayers(){this.items=[];}};return g;},marker,circleMarker:marker,polyline:marker,divIcon:o=>o,latLngBounds:p=>p};
- const context=vm.createContext({window:{L},L,document:{getElementById:get,createElement:element},navigator:geo?{geolocation:geo}:{},location:{search:tiles?'':'?tiles=off'},URLSearchParams,ResizeObserver:class{constructor(fn){resize=fn;}observe(){}},api:apiOverride||(async path=>path.startsWith('/map/locations')?{items:[]}:tiles?({tileUrl:"https://example.invalid/{z}/{x}/{y}.png",attribution:"Fixture tiles"}):({})),locationInput:()=>({latitude:Number(get('latitude').value),longitude:Number(get('longitude').value)}),message(){},setTimeout:fn=>fn()});
+ const map={setView(p){views.push(p);return this;},fitBounds(p){views.push(p);return this;},on(name,fn){this[name]=fn;return this;},invalidateSize(){}};
+ const marker=(point,options)=>({point,options,node:element(),getElement(){return this.node;},on(event,fn){this[event]=fn;return this;},bindTooltip(label){this.tooltip=label;return this;},addTo(g){g.items.push(this);this.add?.();return this;}});
+ const L={tileLayer(){return {addTo(){if(tileEvents.loading)tileEvents.loading();return this;},on(event,fn){tileEvents[event]=fn;return this;}};},map:()=>map,layerGroup(){const g={items:[],getLayers(){return this.items;},addTo(){groups.push(this);return this;},clearLayers(){this.items=[];}};return g;},marker,circleMarker:marker,polyline:marker,divIcon:o=>o,latLngBounds:p=>p};
+ const context=vm.createContext({openRecordDetails(record,opener,restoreFocus){dialogs.push({record,opener,restoreFocus});},window:{L},L,document:{getElementById:get,createElement:element},navigator:geo?{geolocation:geo}:{},location:{search:tiles?'':'?tiles=off'},URLSearchParams,ResizeObserver:class{constructor(fn){resize=fn;}observe(){}},api:apiOverride||(async path=>path.startsWith('/map/locations')?{items:[]}:tiles?({tileUrl:"https://example.invalid/{z}/{x}/{y}.png",attribution:"Fixture tiles"}):({})),locationInput:()=>({latitude:Number(get('latitude').value),longitude:Number(get('longitude').value)}),message(){},setTimeout:fn=>fn()});
  context.setTimeout=fn=>{timers.set(++timerId,fn);return timerId;};context.clearTimeout=id=>timers.delete(id);
  vm.runInContext(fs.readFileSync(__dirname+'/map.js','utf8'),context);
- return {context,get,groups,views,map,tileEvents,resize:()=>resize(),tick(){const pending=[...timers.values()];timers.clear();pending.forEach(fn=>fn());}};
+ return {context,get,groups,views,map,tileEvents,dialogs,resize:()=>resize(),tick(){const pending=[...timers.values()];timers.clear();pending.forEach(fn=>fn());}};
 }
 test('map starts in the saved-locations overview without a draft marker',()=>{
  const h=harness();assert.equal(h.groups[0].items.length,0);
@@ -106,6 +106,10 @@ test('map pages all matching locations and selecting a resource draws candidates
  const recordPins=h.groups.flatMap(group=>group.items).filter(marker=>marker.click);
  const resourcePin=recordPins.find(marker=>marker.options.title.includes('resource')||marker.options.title.includes('Resource'));
  assert.ok(resourcePin);resourcePin.click();await new Promise(setImmediate);
+ assert.equal(h.dialogs[0]?.record.id,'s');
+ assert.equal(h.groups[2].items.length,2);
+ assert.equal(h.get('map-record').value,'');
+ h.get('map-record').change({target:{value:'resource/s'}});await new Promise(setImmediate);
  assert.ok(paths.includes('/resources/s/candidates'));
  assert.equal(h.groups.flatMap(group=>group.items).filter(marker=>Array.isArray(marker.point[0])).length,1);
  assert.doesNotMatch(h.get('map-detail').textContent,/eligible/i);
@@ -179,7 +183,10 @@ test('inspecting a saved resource hides draft and other saved pins, and clicks d
  assert.deepEqual(h.groups.map(group=>group.items.length),[0,0,0,2]);
  const marker=h.groups[3].items[1];
  assert.match(marker.options.title,/Water/i);assert.match(marker.options.title,/request/i);
- marker.click();await new Promise(setImmediate);assert.ok(paths.includes('/requests/need'));
+ marker.click();await new Promise(setImmediate);
+ assert.equal(h.dialogs[0]?.record.id,'need');
+ assert.equal(h.dialogs[0]?.opener,marker.getElement());
+ assert.equal(h.dialogs[0]?.record.distanceMeters,20);
  assert.equal(h.views.length>0,true);
  h.get('map-record').change({target:{value:''}});
  assert.equal(h.groups[2].items.length,3);
@@ -194,4 +201,18 @@ test('explicit overview fits its records once, while later saved-location polls 
  const n=h.views.length;entries=[r,{...r,id:'new',location:{latitude:-20,longitude:90}}];
  await vm.runInContext('refreshLocations()',h.context);
  assert.equal(h.views.length,n);
+});
+test('a replaced map marker receives focus when the shared details dialog closes',async()=>{
+ const resource={id:'saved',kind:'resource',type:'MEDICINE',status:'AVAILABLE',location:{latitude:2,longitude:3}};
+ let status='AVAILABLE';
+ const h=harness(undefined,false,async path=>path.startsWith('/map/locations')?{items:[{...resource,status}]}:{});
+ await new Promise(setImmediate);
+ const first=h.groups[2].items[0],views=h.views.length;
+ first.click();
+ assert.equal(h.dialogs.length,1);
+ status='UNAVAILABLE';await vm.runInContext('refreshLocations()',h.context);
+ const replacement=h.groups[2].items[0];assert.notEqual(replacement,first);
+ h.dialogs[0].restoreFocus();
+ assert.equal(replacement.getElement().focused,true);
+ assert.equal(h.views.length,views);assert.equal(h.get('map-record').value,'');
 });

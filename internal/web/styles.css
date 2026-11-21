@@ -15,8 +15,9 @@
 #resource-dialog::backdrop{background:#142a365c}
 .resource-dialog-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
 .resource-dialog-heading h2{margin:0}
-#resource-dialog-fields{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 18px;margin:18px 0;font-size:.9rem}
+#resource-dialog-fields section{border-top:1px solid #dce4d9;margin-top:12px}
+#resource-dialog-fields h3{font-size:1rem;margin:12px 0 8px}
+#resource-dialog-fields dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 16px;margin:8px 0 14px;font-size:.9rem}
 #resource-dialog-fields dt{color:#536760}
 #resource-dialog-fields dd{margin:0;overflow-wrap:anywhere}
 #resource-dialog-feedback:empty{display:none}
-.record-popup{overflow-wrap:anywhere;line-height:1.45}.record-popup strong{display:block;margin-bottom:.35em}
