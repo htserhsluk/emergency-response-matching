@@ -5,6 +5,7 @@ import (
 	"github.com/htserhsluk/emergency-response-matching/internal/contracts"
 	"github.com/htserhsluk/emergency-response-matching/internal/httpapp"
 	"sort"
+	"time"
 )
 
 func (r *Router) DeleteData(ctx context.Context, kind, id string) error {
@@ -33,7 +34,16 @@ func (r *Router) GetResource(ctx context.Context, id string) (contracts.Resource
 	if err != nil {
 		return contracts.Resource{}, err
 	}
-	return n.GetResource(ctx, id)
+	resource, err := n.GetResource(ctx, id)
+	if err == nil && resource.Status == "ALLOCATED" && resource.AllocatedAt.IsZero() {
+		// Confirmation evidence is optional when only the resource shard is live.
+		if owner, e := r.node(resource.AssignedRequestID); e == nil {
+			lookup, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+			defer cancel()
+			resource.AllocationConfirmedAt, _ = owner.AllocationConfirmation(lookup, id, resource.AssignedRequestID)
+		}
+	}
+	return resource, err
 }
 func (r *Router) SetResourceStatus(ctx context.Context, id, key, status string) (contracts.Resource, error) {
 	n, err := r.node(id)
@@ -72,6 +82,9 @@ func fanout[T any](ctx context.Context, r *Router, fetch func(context.Context, *
 func (r *Router) ListResources(ctx context.Context, q contracts.ListQuery) (contracts.ResourcePage, error) {
 	if q.Validate() != nil {
 		return contracts.ResourcePage{}, contracts.ErrInvalid
+	}
+	if q.Sort == "allocated" {
+		return r.allocationHistory(ctx, q)
 	}
 	pages, err := fanout(ctx, r, func(ctx context.Context, n *httpapp.Client) ([]contracts.ResourcePage, error) {
 		p, e := n.ListResources(ctx, q)

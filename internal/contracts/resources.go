@@ -21,13 +21,15 @@ func (c RegisterResource) Validate() error {
 }
 
 type Resource struct {
-	RegisteredAt      time.Time `json:"registeredAt,omitzero"`
-	ID                string    `json:"id"`
-	Type              string    `json:"type"`
-	Location          *Location `json:"location"`
-	Availability      bool      `json:"availability"`
-	Status            string    `json:"status"`
-	AssignedRequestID string    `json:"assignedRequestId,omitempty"`
+	AllocatedAt           time.Time `json:"allocatedAt,omitzero"`
+	AllocationConfirmedAt time.Time `json:"allocationConfirmedAt,omitzero"`
+	RegisteredAt          time.Time `json:"registeredAt,omitzero"`
+	ID                    string    `json:"id"`
+	Type                  string    `json:"type"`
+	Location              *Location `json:"location"`
+	Availability          bool      `json:"availability"`
+	Status                string    `json:"status"`
+	AssignedRequestID     string    `json:"assignedRequestId,omitempty"`
 }
 type ListQuery struct {
 	Sort   string `json:"sort,omitempty"`
@@ -38,7 +40,7 @@ type ListQuery struct {
 }
 
 func (q ListQuery) Validate() error {
-	if q.Sort != "" && q.Sort != "newest" || q.Type != "" && !validType(q.Type) {
+	if (q.Sort != "" && q.Sort != "newest" && q.Sort != "allocated") || (q.Sort == "allocated" && q.Status != "ALLOCATED") || q.Type != "" && !validType(q.Type) {
 		return ErrInvalid
 	}
 	switch q.Status {
@@ -50,7 +52,7 @@ func (q ListQuery) Validate() error {
 		return ErrInvalid
 	}
 	if q.After != "" {
-		if q.Sort == "newest" {
+		if q.Sort == "newest" || q.Sort == "allocated" {
 			_, _, err := q.NewestCursor()
 			return err
 		}
@@ -71,6 +73,9 @@ func (q ListQuery) NewestCursor() (time.Time, string, error) {
 }
 
 func (q ListQuery) CursorFor(r Resource) string {
+	if q.Sort == "allocated" {
+		return r.AllocationOrderTime().UTC().Format(time.RFC3339Nano) + "/" + r.ID
+	}
 	if q.Sort == "newest" {
 		return r.RegisteredAt.UTC().Format(time.RFC3339Nano) + "/" + r.ID
 	}

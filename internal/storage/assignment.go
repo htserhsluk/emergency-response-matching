@@ -49,7 +49,7 @@ func (s *Store) reserve(ctx context.Context, c contracts.ReserveCommand, settleO
 	}
 	out = contracts.ReservationResult{AssignmentID: c.AssignmentID, RequestID: c.RequestID, ResourceID: c.ResourceID, Status: "REJECTED", Reason: "OUTSIDE_MATCH_RADIUS"}
 	if !settleOnly {
-		tag, err := tx.Exec(ctx, `UPDATE resources SET status='ALLOCATED',availability=false,assigned_request_id=$2,version=version+1 WHERE id=$1 AND availability AND status='AVAILABLE' AND assigned_request_id IS NULL`, c.ResourceID, c.RequestID)
+		tag, err := tx.Exec(ctx, `UPDATE resources SET status='ALLOCATED',allocated_at=clock_timestamp(),availability=false,assigned_request_id=$2,version=version+1 WHERE id=$1 AND availability AND status='AVAILABLE' AND assigned_request_id IS NULL`, c.ResourceID, c.RequestID)
 		if err != nil {
 			return out, err
 		}

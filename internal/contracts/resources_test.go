@@ -14,6 +14,8 @@ func TestResourceListNewestCursorAndFilter(t *testing.T) {
 		{`{"limit":2,"type":"WATER","sort":"newest","after":"2025-03-29T10:11:12.123456Z/00000000000000000000000000000001"}`, true},
 		{`{"limit":2,"type":"UNKNOWN"}`, false},
 		{`{"limit":2,"sort":"other"}`, false},
+		{`{"limit":20,"sort":"allocated","status":"ALLOCATED"}`, true},
+		{`{"limit":20,"sort":"allocated","status":"AVAILABLE"}`, false},
 		{`{"limit":2,"sort":"newest","after":"` + id + `"}`, false},
 	} {
 		var q ListQuery

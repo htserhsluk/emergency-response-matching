@@ -8,12 +8,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const resourceColumns = `id,type,ST_Y(location::geometry),ST_X(location::geometry),availability,status,coalesce(assigned_request_id,''),registered_at`
+const resourceColumns = `id,type,ST_Y(location::geometry),ST_X(location::geometry),availability,status,coalesce(assigned_request_id,''),registered_at,coalesce(allocated_at,'0001-01-01 00:00 UTC')`
 
 func scanResource(row pgx.Row) (contracts.Resource, error) {
 	var r contracts.Resource
 	var lat, lon float64
-	err := row.Scan(&r.ID, &r.Type, &lat, &lon, &r.Availability, &r.Status, &r.AssignedRequestID, &r.RegisteredAt)
+	err := row.Scan(&r.ID, &r.Type, &lat, &lon, &r.Availability, &r.Status, &r.AssignedRequestID, &r.RegisteredAt, &r.AllocatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, contracts.ErrNotFound
 	}
@@ -118,6 +118,9 @@ func (s *Store) ListResources(ctx context.Context, q contracts.ListQuery) (contr
 	out := contracts.ResourcePage{Items: []contracts.Resource{}}
 	if q.Validate() != nil {
 		return out, contracts.ErrInvalid
+	}
+	if q.Sort == "allocated" {
+		return s.allocationHistory(ctx, q)
 	}
 	query := `SELECT ` + resourceColumns + ` FROM resources
 		WHERE ($1='' OR status=$1 OR ($1='UNALLOCATED' AND status IN ('AVAILABLE','UNAVAILABLE')))

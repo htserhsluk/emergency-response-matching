@@ -73,7 +73,7 @@
             "containers": [
               {
                 "name": "coordinator",
-                "image": "erm-coordinator:map-v9",
+                "image": "erm-coordinator:map-v10",
                 "imagePullPolicy": "Never",
                 "env": [
                   {
@@ -218,7 +218,7 @@
             "containers": [
               {
                 "name": "api",
-                "image": "erm-api:map-v9",
+                "image": "erm-api:map-v10",
                 "imagePullPolicy": "Never",
                 "env": [
                   {
