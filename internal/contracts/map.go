@@ -43,7 +43,7 @@ type RequestPreview struct {
 }
 
 func ValidMapQuery(kind, after string) bool {
-	if !validType(kind) {
+	if kind != "ALL" && !validType(kind) {
 		return false
 	}
 	if after == "" {

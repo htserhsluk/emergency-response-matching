@@ -10,19 +10,19 @@ Use PowerShell7 from the repository root. Tools: Docker Desktop Linux engine, Mi
 
 ```powershell
 foreach ($service in @('api','coordinator','storage-node','matching')) {
-    docker build -f infra/Dockerfile --build-arg "SERVICE=$service" -t "erm-${service}:map-v9" .
+    docker build -f infra/Dockerfile --build-arg "SERVICE=$service" -t "erm-${service}:map-v10" .
     if ($LASTEXITCODE) { throw "Build failed: $service" }
 }
-docker build -f infra/Dockerfile.migrate -t erm-migrate:map-v9 .
+docker build -f infra/Dockerfile.migrate -t erm-migrate:map-v10 .
 if ($LASTEXITCODE) { throw 'Migration image build failed' }
-minikube -p erm-lab image load erm-api:map-v9 erm-coordinator:map-v9 erm-storage-node:map-v9 erm-matching:map-v9 erm-migrate:map-v9
+minikube -p erm-lab image load erm-api:map-v10 erm-coordinator:map-v10 erm-storage-node:map-v10 erm-matching:map-v10 erm-migrate:map-v10
 if ($LASTEXITCODE) { throw 'Image load failed' }
 ./scripts/bootstrap-k8s.ps1
 ```
 
-Bootstrap initializes the coordinator once, migrates each initial primary through schema 9, then brings up its standby and enables synchronous replay. It refuses an existing control PVC. For subsequent upgrades use `./scripts/upgrade-k8s.ps1`; it follows saved primaries and resets Matching to one worker. Never blindly bootstrap over an interrupted installation: inspect Jobs, roles, PVCs and journal state first.
+Bootstrap initializes the coordinator once, migrates each initial primary through schema 10, then brings up its standby and enables synchronous replay. It refuses an existing control PVC. For subsequent upgrades use `./scripts/upgrade-k8s.ps1`; it follows saved primaries and resets Matching to one worker. Never blindly bootstrap over an interrupted installation: inspect Jobs, roles, PVCs and journal state first.
 
-Rebuild and load all five images before upgrading an existing schema 7 deployment. Schema 8 timestamps new resource registrations. Schema 9 updates the search limit and enables automatic retries for unmatched requests. The `map-v9` images are separate from the earlier `expanded` images. Record the image IDs and source revision for each rehearsal.
+Rebuild and load all five images before upgrading an existing deployment. Schema 8 timestamps new resource registrations. Schema 9 updates the search limit and enables automatic retries for unmatched requests. Schema 10 supports allocation-time history. Use the matching `map-v10` application and migration images. Record the image IDs and source revision for each rehearsal.
 
 ## Restart, stop and inspection
 
@@ -77,7 +77,7 @@ $env:KUBECONFIG = Join-Path (Get-Location) '.local/release-kubeconfig'
 # Refuse/review an existing rehearsal profile or kubeconfig before starting.
 minikube start -p erm-release --driver=docker --kubernetes-version=v1.36.1 --cpus=2 --memory=3072
 kubectl config rename-context erm-release erm-lab
-minikube -p erm-release image load erm-api:map-v9 erm-coordinator:map-v9 erm-storage-node:map-v9 erm-matching:map-v9 erm-migrate:map-v9
+minikube -p erm-release image load erm-api:map-v10 erm-coordinator:map-v10 erm-storage-node:map-v10 erm-matching:map-v10 erm-migrate:map-v10
 ./scripts/bootstrap-k8s.ps1
 # Run the acceptance/rehearsal commands above against this isolated kubeconfig.
 # Preserve its logs and volumes; restore the original environment afterward:

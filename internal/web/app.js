@@ -37,36 +37,130 @@ function displayRequest(r){
  $('complete').disabled=r.status!=='ASSIGNED';$('match').disabled=!['PENDING','UNMATCHED'].includes(r.status);
 }
 async function refresh(generation=followGeneration){if(!selected)return;const id=selected,sequence=++requestRefresh;const r=await api('/requests/'+id);if(selected===id&&generation===followGeneration&&sequence===requestRefresh){displayRequest(r);await notifications(id,'',generation);}return r;}
-function follow(id){const generation=++followGeneration;selected=id;lastRequest=null;if(typeof clearMappedRequest==='function')clearMappedRequest();$('request-id').value=id;$('request-result').textContent='Loading saved status…';$('inbox-list').textContent='Loading inbox…';$('match').disabled=true;$('complete').disabled=true;clearTimeout(timer);const poll=async()=>{let delay=3000;try{await refresh(generation);}catch(e){if(generation===followGeneration)message('Status or inbox refresh failed: '+e.message,true);delay=10000;}if(generation===followGeneration)timer=setTimeout(poll,delay);};poll();}
+function follow(id){const generation=++followGeneration;selected=id;lastRequest=null;if(typeof focusMapRequest==='function')focusMapRequest(id);$('request-id').value=id;$('request-result').textContent='Loading saved status…';$('inbox-list').textContent='Loading inbox…';$('match').disabled=true;$('complete').disabled=true;clearTimeout(timer);const poll=async()=>{let delay=3000;try{await refresh(generation);}catch(e){if(generation===followGeneration)message('Status or inbox refresh failed: '+e.message,true);delay=10000;}if(generation===followGeneration)timer=setTimeout(poll,delay);};poll();}
 $('request').onclick=()=>action($('request'),async()=>{if(!$('details').value.trim())throw new Error('Describe the request before submitting.');const r=await api('/requests','POST',{type:$('type').value,location:locationInput(),details:$('details').value});if(typeof clearInspection==='function'&&detailLayer){clearInspection();refreshLocations();}follow(r.id);message('Request saved. Matching starts automatically. Follow the saved status below.');});
-$('resource').onclick=()=>action($('resource'),async()=>{const r=await api('/resources','POST',{type:$('type').value,location:locationInput(),availability:true});message('Available resource registered: '+r.id);showCreatedResource(r);if(typeof inspectRecord==='function'&&recordsLayer&&r.type===type.value){inspectRecord({...r,kind:'resource'});refreshLocations();}await resources();});
+$('resource').onclick=()=>action($('resource'),async()=>{const r=await api('/resources','POST',{type:$('type').value,location:locationInput(),availability:true});message('Available resource registered: '+r.id);showCreatedResource(r);if(typeof inspectRecord==='function'&&recordsLayer&&mapIncludes(r.type)){inspectRecord({...r,kind:'resource'});refreshLocations();}await resources();});
 $('lookup').onsubmit=e=>{e.preventDefault();follow($('request-id').value.trim());};
 $('match').onclick=()=>action($('match'),async()=>{if(!selected)throw new Error('Look up a request first.');await api('/match/'+selected,'POST',{});message('Matching scheduled. The saved status will update asynchronously.');await refresh();});
 $('complete').onclick=()=>action($('complete'),async()=>{if(!selected)throw new Error('Look up a request first.');await api('/requests/'+selected+'/status','PUT',{status:'COMPLETED'});message('Request marked completed.');await refresh();});
-function resourceRow(r){
- const row=el('div','','record');row.append(el('strong',`${r.type} / ${r.status}`),el('p',r.id),el('p',`${r.location.latitude}, ${r.location.longitude}`));
- if(r.assignedRequestId)row.append(el('p','Assigned request: '+r.assignedRequestId));
- if(r.status!=='ALLOCATED'){
-  const button=el('button',r.availability?'Mark unavailable':'Mark available','secondary');
-  button.onclick=()=>action(button,async()=>{const updated=await api('/resources/'+r.id+'/status','PUT',{status:r.availability?'UNAVAILABLE':'AVAILABLE'});if(createdResource&&createdResource.id===updated.id)showCreatedResource(updated);message('Resource availability updated.');await resources();});row.append(button);
- }
- return row;
+function resourceName(r){
+ return r.type.charAt(0)+r.type.slice(1).toLowerCase()+' resource';
 }
-function showCreatedResource(r){++createdRefresh;createdResource=r;$('created-resource').replaceChildren(el('h3','Recently registered resource'),resourceRow(r));}
+function resourceRow(r){
+ const button=el('button','','resource-entry');
+ button.type='button';
+ button.id='resource-entry-'+r.id;
+ button.setAttribute('aria-haspopup','dialog');
+ button.append(el('strong',resourceName(r)),el('span',r.id));
+ button.onclick=()=>openResourceDetails(r,button);
+ return button;
+}
+let detailResource=null, detailOpener=null, detailRead=0;
+function availabilityControl(r){
+ const button=el('button',r.availability?'Mark unavailable':'Mark available','secondary');
+ button.onclick=()=>action(button,async()=>{
+  if(detailResource?.id===r.id)++detailRead;
+  let updated;
+  try{
+   updated=await api('/resources/'+r.id+'/status','PUT',{status:r.availability?'UNAVAILABLE':'AVAILABLE'});
+  }catch(error){
+   if(detailResource?.id===r.id)$('resource-dialog-feedback').textContent=error.message;
+   throw error;
+  }
+  if(createdResource?.id===updated.id)showCreatedResource(updated);
+  if(detailResource?.id===updated.id){
+   renderResourceDetails(updated);
+   $('resource-dialog-feedback').textContent='Resource availability updated.';
+   $('resource-dialog-actions').firstElementChild?.focus();
+  }
+  message('Resource availability updated.');
+  await resources();
+ });
+ return button;
+}
+function renderResourceDetails(r){
+ detailResource=r;
+ $('resource-dialog-title').textContent=resourceName(r);
+ const fields=$('resource-dialog-fields');
+ fields.replaceChildren();
+ function field(label,value){fields.append(el('dt',label),el('dd',value));}
+ field('Resource ID',r.id);
+ field('Assistance type',r.type);
+ field('Status',r.status);
+ field('Available for matching',r.availability?'Yes':'No');
+ field('Latitude',String(r.location.latitude));
+ field('Longitude',String(r.location.longitude));
+ field('Registered',r.registeredAt?new Date(r.registeredAt).toLocaleString():'Unknown');
+ if(r.status==='ALLOCATED'){
+  field('Assigned request ID',r.assignedRequestId||'Unknown');
+  field('Allocated',r.allocatedAt?new Date(r.allocatedAt).toLocaleString():'Unknown');
+  if(r.allocationConfirmedAt)field('Allocation confirmed',new Date(r.allocationConfirmedAt).toLocaleString());
+ }
+ const actions=$('resource-dialog-actions');
+ actions.replaceChildren();
+ if(r.status!=='ALLOCATED')actions.append(availabilityControl(r));
+}
+async function openResourceDetails(r,button){
+ const sequence=++detailRead;
+ detailOpener=button;
+ renderResourceDetails(r);
+ const feedback=$('resource-dialog-feedback');
+ const initialAction=$('resource-dialog-actions').firstElementChild;
+ if(initialAction)initialAction.disabled=true;
+ feedback.textContent='Checking current details.';
+ $('resource-dialog').showModal();
+ try{
+  const current=await api('/resources/'+r.id);
+  if(sequence!==detailRead)return;
+  const actionFocused=$('resource-dialog-actions').contains(document.activeElement);
+  renderResourceDetails(current);
+  feedback.textContent='';
+  if(actionFocused)($('resource-dialog-actions').firstElementChild||$('resource-dialog-close')).focus();
+ }catch(error){
+  if(sequence===detailRead){
+   feedback.textContent='Showing the last loaded details. '+error.message;
+   if(initialAction)initialAction.disabled=false;
+  }
+ }
+}
+$('resource-dialog-close').onclick=()=>$('resource-dialog').close();
+$('resource-dialog').onclose=()=>{
+ ++detailRead;
+ const target=detailOpener?.isConnected?detailOpener:$(detailOpener?.id)||$('resource-filter');
+ detailOpener=null;
+ detailResource=null;
+ target.focus();
+};
+function showCreatedResource(r){
+ ++createdRefresh;
+ createdResource=r;
+ const summary=el('div','','record');
+ summary.append(el('strong',resourceName(r)+' / '+r.status),el('p',r.id),el('p',r.location.latitude+', '+r.location.longitude));
+ if(r.assignedRequestId)summary.append(el('p','Assigned request: '+r.assignedRequestId));
+ if(r.status!=='ALLOCATED')summary.append(availabilityControl(r));
+ $('created-resource').replaceChildren(el('h3','Recently registered resource'),summary);
+}
 async function refreshCreatedResource(){if(!createdResource)return;const id=createdResource.id,sequence=++createdRefresh;try{const r=await api('/resources/'+id);if(sequence===createdRefresh&&createdResource.id===id)showCreatedResource(r);}catch(e){if(sequence===createdRefresh)$('created-resource').replaceChildren(el('h3','Recently registered resource'),el('p',id),el('p','Current status unavailable. Refresh to retry.'));}}
 async function resources(after=''){
  const generation=++resourceGeneration,filter=resourceFilter,feedback=$('resource-feedback');
  refreshCreatedResource();feedback.textContent='Loading resources…';$('more-resources').disabled=true;
  try{
-  const page=await api('/resources?sort=newest&limit=20&after='+encodeURIComponent(after)+'&status='+encodeURIComponent(filter));
+  const order=filter==='ALLOCATED'?'allocated':'newest';
+  const page=await api('/resources?sort='+order+'&limit=20&after='+encodeURIComponent(after)+'&status='+encodeURIComponent(filter));
   if(generation!==resourceGeneration)return;
   const fingerprint=JSON.stringify({filter,after,page}),unchanged=fingerprint===resourceFingerprint;
-  const box=$('resource-list');box.replaceChildren();
-  for(const r of page.items)box.append(resourceRow(r));
-  if(!page.items.length)box.append(el('p','No resources in this view. Try another filter or register assistance.'));
+  const box=$('resource-list');
+  if(!unchanged){
+   const focused=document.activeElement;
+   const restore=focused&&box.contains(focused);
+   box.replaceChildren();
+   for(const r of page.items)box.append(resourceRow(r));
+   if(!page.items.length)box.append(el('p','No resources in this view. Try another filter or register assistance.'));
+   if(restore)($(focused.id)||$('resource-filter')).focus();
+  }
   nextResource=page.next||'';$('more-resources').hidden=!nextResource;
   resourceFingerprint=fingerprint;resourceLoaded=true;
-  feedback.textContent=unchanged?'Refresh complete — results unchanged.':`Loaded ${page.items.length} resources. Newest registrations first.`;
+  feedback.textContent=unchanged?'Refresh complete — results unchanged.':`Loaded ${page.items.length} resources. ${filter==='ALLOCATED'?'Most recent allocations first.':'Newest registrations first.'}`;
  }catch(e){if(generation===resourceGeneration){feedback.textContent='Refresh failed. Previous results may be out of date. '+e.message;} }
  finally{if(generation===resourceGeneration)$('more-resources').disabled=false;}
 }

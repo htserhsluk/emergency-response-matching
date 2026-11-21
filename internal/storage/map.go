@@ -10,9 +10,9 @@ func (s *Store) MapLocations(ctx context.Context, kind, after string) (contracts
 	if !contracts.ValidMapQuery(kind, after) {
 		return out, contracts.ErrInvalid
 	}
-	rows, err := s.pool.Query(ctx, `SELECT kind,id,status,ST_Y(location::geometry),ST_X(location::geometry),related FROM (
- SELECT 'request' AS kind,id,status,location,coalesce(assigned_resource_id,'') AS related FROM requests WHERE type=$1 AND ('request:'||id)>$2
- UNION ALL SELECT 'resource',id,status,location,coalesce(assigned_request_id,'') FROM resources WHERE type=$1 AND ('resource:'||id)>$2
+	rows, err := s.pool.Query(ctx, `SELECT kind,id,type,status,ST_Y(location::geometry),ST_X(location::geometry),related FROM (
+ SELECT 'request' AS kind,id,type,status,location,coalesce(assigned_resource_id,'') AS related FROM requests WHERE ($1='ALL' OR type=$1) AND ('request:'||id)>$2
+ UNION ALL SELECT 'resource',id,type,status,location,coalesce(assigned_request_id,'') FROM resources WHERE ($1='ALL' OR type=$1) AND ('resource:'||id)>$2
  ) locations ORDER BY kind,id LIMIT $3`, kind, after, contracts.MapPageSize+1)
 	if err != nil {
 		return out, err
@@ -22,10 +22,9 @@ func (s *Store) MapLocations(ctx context.Context, kind, after string) (contracts
 		var p contracts.MapLocation
 		var lat, lon float64
 		var related string
-		if err := rows.Scan(&p.Kind, &p.ID, &p.Status, &lat, &lon, &related); err != nil {
+		if err := rows.Scan(&p.Kind, &p.ID, &p.Type, &p.Status, &lat, &lon, &related); err != nil {
 			return out, err
 		}
-		p.Type = kind
 		p.Location = &contracts.Location{Latitude: &lat, Longitude: &lon}
 		if p.Kind == "request" {
 			p.AssignedResourceID = related

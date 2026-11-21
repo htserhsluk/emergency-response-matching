@@ -48,6 +48,24 @@ func TestMapLocationsAndFiveNearestRequests(t *testing.T) {
 	api := httptest.NewServer(httpapp.NewServer(router, "", false))
 	defer api.Close()
 	client := httpapp.NewPublicClient(api.URL)
+	counts := map[string]int{}
+	after := ""
+	for pageNumber := 0; ; pageNumber++ {
+		page, err := client.MapLocations(ctx, "ALL", after)
+		if err != nil || pageNumber > 1 {
+			t.Fatalf("all locations page %d: %v", pageNumber, err)
+		}
+		for _, record := range page.Items {
+			counts[record.Kind+"/"+record.Type]++
+		}
+		if page.Next == "" {
+			break
+		}
+		after = page.Next
+	}
+	if len(counts) != 3 || counts["request/MEDICINE"] != 120 || counts["request/WATER"] != 9 || counts["resource/WATER"] != 1 {
+		t.Fatalf("all locations lost records or types: %v", counts)
+	}
 	first, err := client.MapLocations(ctx, "MEDICINE", "")
 	if err != nil || len(first.Items) != 100 || first.Next == "" {
 		t.Fatalf("first map page: %d, %v", len(first.Items), err)

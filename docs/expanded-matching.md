@@ -22,6 +22,6 @@ Use the existing quiesced upgrade process against the saved primaries and their 
 
 ## Directory and map
 
-The browser requests newest-first resource pages. The directory filters by status. API callers can also filter by assistance type before pagination. Historical undated registrations have a stable ID tie-break. The default API order remains ascending ID for callers that omit the sort option.
+The available and unavailable views request newest-first registration pages. Allocation history shows the latest 50 allocations across all shards, ordered by allocation time. The display limit does not remove older records. The directory filters by status. API callers can also filter by assistance type before pagination. Historical undated registrations have a stable ID tie-break. The default API order remains ascending ID for callers that omit the sort option.
 
 Choosing an assistance type loads saved request and resource locations of that type. Selecting a resource shows up to five nearby eligible requests ordered by distance and ID. Concurrent activity may change eligibility between refreshes. Once the assignment is confirmed the map identifies the matched request from the saved association. The map also supports manual coordinates and optional browser geolocation. Background tiles are optional. See [browser controls](browser.md) and the [HTTP contract](api.md).

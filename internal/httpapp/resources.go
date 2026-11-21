@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 )
 
 type Resources interface {
@@ -51,6 +52,22 @@ func serveResources(w http.ResponseWriter, r *http.Request, store Requests, part
 			return
 		}
 		result, err = s.ListResources(r.Context(), q)
+	} else if internal && len(parts) == 3 && parts[0] == "resources" && parts[2] == "allocation-confirmation" && r.Method == "GET" {
+		resource, request := parts[1], r.URL.Query().Get("requestId")
+		_, re := routing.ShardFor(resource)
+		_, qe := routing.ShardFor(request)
+		if re != nil || qe != nil {
+			fail(w, contracts.ErrInvalid, "")
+			return
+		}
+		reader, ok := store.(interface {
+			AllocationConfirmation(context.Context, string, string) (time.Time, error)
+		})
+		if !ok {
+			fail(w, contracts.ErrUnavailable, "")
+			return
+		}
+		result, err = reader.AllocationConfirmation(r.Context(), resource, request)
 	} else if len(parts) == 2 && parts[0] == "resources" && r.Method == "GET" {
 		if _, err := routing.ShardFor(parts[1]); err != nil {
 			fail(w, contracts.ErrInvalid, "")
@@ -148,5 +165,10 @@ func (c *Client) ListResources(ctx context.Context, q contracts.ListQuery) (out 
 }
 func (c *Client) Search(ctx context.Context, q contracts.SearchQuery) (out []contracts.Candidate, err error) {
 	err = c.exchange(ctx, "POST", "/search", "", q, &out)
+	return
+}
+
+func (c *Client) AllocationConfirmation(ctx context.Context, resource, request string) (out time.Time, err error) {
+	err = c.exchange(ctx, "GET", "/resources/"+resource+"/allocation-confirmation?requestId="+url.QueryEscape(request), "", nil, &out)
 	return
 }

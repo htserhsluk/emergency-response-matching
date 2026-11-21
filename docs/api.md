@@ -8,7 +8,7 @@ JSON requests/responses use `Content-Type: application/json`. Mutation requests 
 | `GET /requests/{id}` | 200 | Request fields and current status, plus saved assignment summary when present |
 | `PUT /requests/{id}/status` | 200 | `{"status":"COMPLETED"}` after assignment; current-state no-op allowed, public assignment bypass forbidden |
 | `POST /resources` | 201 | `{"type":"WATER","location":{"latitude":12.9,"longitude":77.6},"availability":true}` |
-| `GET /resources` | 200 | `{items,next}`; filtered pages across all shards, ascending ID by default or newest registration with `sort=newest` |
+| `GET /resources` | 200 | `{items,next}`; filtered pages across all shards, ascending ID by default or newest registration with `sort=newest`, or recent allocations with `sort=allocated&status=ALLOCATED` |
 | `PUT /resources/{id}/status` | 200 | `{"status":"AVAILABLE"}` or `UNAVAILABLE` for unallocated resources; no public allocation/release bypass |
 | `POST /match/{requestId}` | 200 | `{}`; schedules eligible unmatched work or returns current state, never promises immediate assignment |
 
@@ -32,9 +32,11 @@ Typed `/internal/data/request:{id}` and `resource:{id}` provide safe CRUD; delet
 
 `GET /resources` accepts optional `status`, `type`, `sort`, `limit` and `after`. Status accepts UNALLOCATED (AVAILABLE and UNAVAILABLE), AVAILABLE, UNAVAILABLE or ALLOCATED. Type accepts the five assistance types above. Omitting sort yields the original ascending-ID ordering. Use `sort=newest` for descending registration time and descending ID. Historical registrations with unknown times follow dated records. Each shard filters before applying its limit. Pass the returned `next` as `after` with the same filters and sort. Restart pagination after changing filters. Concurrent changes can move records between pages.
 
-`GET /resources/{id}` returns the saved resource, its registration time when known, and its assigned request ID when allocated.
+`GET /resources?status=ALLOCATED&sort=allocated` pages through the latest 50 allocations across the three shards. New allocations use the timestamp saved with the successful reservation. Older allocations use their recorded confirmation time when available. Undated rows follow dated rows, and descending resource ID breaks ties. Each page is drawn from the current top 50. Older records remain available through individual lookups.
 
-`GET /map/locations?type=WATER` returns pages of up to 100 saved request and resource locations for the specified type, with kind, ID, location and status. Supply the returned `next` as `after` to continue.
+`GET /resources/{id}` returns the saved resource, its registration time when known, and its assigned request ID when allocated. For new allocations it returns `allocatedAt`. Older records can carry `allocationConfirmedAt` when the request shard has confirmation evidence.
+
+`GET /map/locations?type=WATER` returns pages of up to 100 saved request and resource locations for the specified type. Use `type=ALL` for every assistance type. Each record is returned with kind, ID, location and status. Supply the returned `next` as `after` to continue.
 
 `GET /resources/{id}/candidates` returns `items` with up to five eligible requests ranked by geographic distance and ID. Each item has an ID, location and distance in metres. Candidates must be within 4,000 km and have the same assistance type. Paused requests and requests with active reservations or assignment intents are excluded. Once the resource has an owner, `items` is empty. The `assignedRequest` field appears after the request shard confirms finalization and includes the saved assignment distance.
 
